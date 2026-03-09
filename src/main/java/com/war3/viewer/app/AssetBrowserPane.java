@@ -3,6 +3,7 @@ package com.war3.viewer.app;
 import com.war3.viewer.app.datasource.GameDataSource;
 import com.war3.viewer.app.settings.AppSettings;
 import com.war3.viewer.app.settings.SettingsDialog;
+import javafx.animation.AnimationTimer;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -376,11 +377,33 @@ public class AssetBrowserPane extends BorderPane {
             return;
         }
 
-        for (Path file : files) {
-            tilePane.getChildren().add(new ModelCard(file, rootDirectory, previewFactory, previewExecutor, cardWidth));
-        }
+        statusLabel.setText("Loading 0 / " + files.size() + " models…");
 
-        statusLabel.setText("Loaded " + files.size() + " model thumbnails.");
+        final int total = files.size();
+        final int[] idx = {0};
+        new AnimationTimer() {
+            private static final int BATCH = 3;
+
+            @Override
+            public void handle(final long now) {
+                if (requestId != refreshCounter.get()) {
+                    stop();
+                    return;
+                }
+                if (idx[0] >= total) {
+                    stop();
+                    statusLabel.setText("Loaded " + total + " model thumbnails.");
+                    return;
+                }
+                final int end = Math.min(idx[0] + BATCH, total);
+                for (int i = idx[0]; i < end; i++) {
+                    tilePane.getChildren().add(
+                            new ModelCard(files.get(i), rootDirectory, previewFactory, previewExecutor, cardWidth));
+                }
+                statusLabel.setText("Loading " + end + " / " + total + " models…");
+                idx[0] = end;
+            }
+        }.start();
     }
 
     public void shutdown() {
