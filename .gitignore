@@ -1,0 +1,64 @@
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+.idea_modules/
+
+# Eclipse
+.classpath
+.project
+.settings/
+bin/
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# NetBeans
+nbproject/
+.nb-gradle/
+
+# Build & Gradle
+build/
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+gradle-app.setting
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# Java
+*.class
+*.jar
+!libs/*.jar
+*.war
+*.ear
+
+# Project-specific (War3 assets)
+*.blp
+*.mdx
+*.w3x
+*.w3m
+processed_*.w3x
+processed_*.w3m
+
+# Generated
+gen/
+out/
+*.kotlin_module
+
+# Local overrides
+local.properties
+
+# Claude local settings
+.claude/settings.local.json

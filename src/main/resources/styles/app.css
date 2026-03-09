@@ -1,0 +1,153 @@
+.app-root {
+    -fx-background-color: linear-gradient(to bottom, #f4f7fb, #ecf1f8);
+    -fx-font-family: "Aptos", "Segoe UI", "Noto Sans", sans-serif;
+}
+
+.top-bar {
+    -fx-alignment: center-left;
+}
+
+.primary-button {
+    -fx-background-color: #1565c0;
+    -fx-text-fill: white;
+    -fx-background-radius: 10;
+    -fx-padding: 8 14 8 14;
+    -fx-font-weight: 700;
+}
+
+.primary-button:hover {
+    -fx-background-color: #0f4e98;
+}
+
+.button {
+    -fx-background-color: #dce5f2;
+    -fx-text-fill: #10253f;
+    -fx-background-radius: 10;
+    -fx-padding: 8 14 8 14;
+}
+
+.button:hover {
+    -fx-background-color: #cbd8ea;
+}
+
+.root-field,
+.search-field {
+    -fx-background-color: white;
+    -fx-border-color: #c9d3e3;
+    -fx-border-radius: 10;
+    -fx-background-radius: 10;
+    -fx-padding: 8 10 8 10;
+}
+
+.left-pane,
+.right-pane {
+    -fx-background-color: rgba(255, 255, 255, 0.78);
+    -fx-background-radius: 14;
+    -fx-border-color: #d1d9e5;
+    -fx-border-radius: 14;
+}
+
+.panel-title {
+    -fx-font-size: 14px;
+    -fx-font-weight: 700;
+    -fx-text-fill: #203750;
+}
+
+.folder-tree {
+    -fx-background-color: transparent;
+    -fx-control-inner-background: transparent;
+}
+
+.folder-tree .tree-cell {
+    -fx-background-color: transparent;
+    -fx-padding: 5 6 5 6;
+    -fx-text-fill: #26364b;
+}
+
+.folder-tree .tree-cell:selected {
+    -fx-background-color: #dce8f7;
+    -fx-background-radius: 8;
+    -fx-text-fill: #0f2f58;
+}
+
+.thumbnail-scroll {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-background-insets: 0;
+}
+
+.thumbnail-scroll > .viewport {
+    -fx-background-color: transparent;
+}
+
+.asset-card {
+    -fx-background-color: rgba(255, 255, 255, 0.96);
+    -fx-border-color: #cfdae9;
+    -fx-border-radius: 14;
+    -fx-background-radius: 14;
+    -fx-effect: dropshadow(gaussian, rgba(26, 45, 69, 0.09), 14, 0.2, 0, 4);
+}
+
+.asset-card:hover {
+    -fx-translate-y: -1;
+    -fx-border-color: #8fb2db;
+}
+
+.preview-pane {
+    -fx-background-color: #e9eef5;
+    -fx-border-color: #c8d3e3;
+    -fx-border-radius: 10;
+    -fx-background-radius: 10;
+}
+
+.asset-name {
+    -fx-font-size: 13px;
+    -fx-font-weight: 700;
+    -fx-text-fill: #1c3047;
+}
+
+.asset-path {
+    -fx-font-size: 11px;
+    -fx-text-fill: #4a627f;
+}
+
+.preview-error,
+.empty-text,
+.status-text {
+    -fx-text-fill: #4d6079;
+}
+
+.preview-error {
+    -fx-font-size: 12px;
+    -fx-font-weight: 600;
+}
+
+/* Settings dialog */
+.settings-section-title {
+    -fx-font-size: 13px;
+    -fx-font-weight: 700;
+    -fx-text-fill: #203750;
+}
+
+.settings-dialog .dialog-pane {
+    -fx-background-color: #f4f7fb;
+    -fx-font-family: "Aptos", "Segoe UI", "Noto Sans", sans-serif;
+}
+
+/* Combo box */
+.combo-box {
+    -fx-background-color: white;
+    -fx-border-color: #c9d3e3;
+    -fx-border-radius: 8;
+    -fx-background-radius: 8;
+}
+
+/* Slider thumb */
+.slider .thumb {
+    -fx-background-color: #1565c0;
+}
+
+/* Asset card hover pointer */
+.asset-card:hover {
+    -fx-cursor: hand;
+}
