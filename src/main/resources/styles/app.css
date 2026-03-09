@@ -137,6 +137,15 @@
     -fx-fill: -color-bg-subtle;
 }
 
+/* ── Model detail dialog ──────────────────────────────────────────── */
+
+.diag-area {
+    -fx-font-family: 'Consolas', 'Courier New', monospace;
+    -fx-font-size: 11px;
+    -fx-control-inner-background: -color-bg-subtle;
+    -fx-text-fill: -color-fg-default;
+}
+
 /* ── Settings dialog ──────────────────────────────────────────────── */
 
 .settings-section-title {

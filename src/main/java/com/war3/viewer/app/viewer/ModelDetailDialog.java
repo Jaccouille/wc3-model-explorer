@@ -1,6 +1,8 @@
 package com.war3.viewer.app.viewer;
 
 import com.hiveworkshop.rms.parsers.mdlx.InterpolationType;
+import com.hiveworkshop.rms.parsers.mdlx.MdlxAnimatedObject;
+import com.hiveworkshop.rms.parsers.mdlx.MdlxCamera;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxGeoset;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxGeosetAnimation;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxModel;
@@ -26,9 +28,12 @@ import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.ListCell;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.Slider;
 import javafx.scene.control.SplitPane;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.TextArea;
 import javafx.scene.shape.Box;
 import javafx.scene.layout.BorderPane;
@@ -40,6 +45,7 @@ import javafx.scene.paint.Color;
 import javafx.scene.paint.PhongMaterial;
 import javafx.scene.shape.CullFace;
 import javafx.scene.shape.MeshView;
+import javafx.scene.shape.Rectangle;
 import javafx.scene.shape.TriangleMesh;
 import javafx.scene.transform.Rotate;
 import javafx.stage.Modality;
@@ -50,12 +56,13 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
 public final class ModelDetailDialog extends Stage {
-    private static final double VIEW_W = 640;
+    private static final double VIEW_W = 800;
     private static final double VIEW_H = 480;
     private static final double DIAG_W = 400;
 
@@ -92,6 +99,10 @@ public final class ModelDetailDialog extends Stage {
     // Scene extras
     private Group gridGroup;
 
+    // Bounds / normalization (set in setupModel, used by camera view)
+    private MdxPreviewFactory.BoundsInfo modelBounds;
+    private double modelNormScale;
+
     // Camera / scene
     private final Group    modelGroup = new Group();
     private final Rotate   azimuthRotate   = new Rotate(38,  Rotate.Y_AXIS);
@@ -111,34 +122,54 @@ public final class ModelDetailDialog extends Stage {
         setTitle(mdxFile.getFileName().toString());
 
         final StackPane viewStack = new StackPane();
-        viewStack.setPrefSize(VIEW_W, VIEW_H);
+        viewStack.setPrefWidth(VIEW_W);
 
         final ProgressIndicator progress = new ProgressIndicator();
         viewStack.getChildren().add(progress);
 
-        // Bottom controls (populated after model loads)
+        // Animation controls (right panel tab)
         final Label seqLabel = new Label("Animation:");
         final ComboBox<String> seqCombo = new ComboBox<>();
-        seqCombo.setPrefWidth(240);
+        HBox.setHgrow(seqCombo, Priority.ALWAYS);
         final Button playBtn = new Button("▶ Play");
         final Slider frameSlider = new Slider();
-        frameSlider.setPrefWidth(220);
         HBox.setHgrow(frameSlider, Priority.ALWAYS);
         final Label frameLabel = new Label("Frame: 0");
 
         // Team colour selector
-        final Label tcLabel = new Label("TC:");
+        final Label tcLabel = new Label("Team Color:");
         final ComboBox<String> tcCombo = new ComboBox<>(
                 FXCollections.observableArrayList(MdxPreviewFactory.TEAM_COLOR_NAMES));
         tcCombo.getSelectionModel().selectFirst();
-        tcCombo.setPrefWidth(120);
+        HBox.setHgrow(tcCombo, Priority.ALWAYS);
+
+        final javafx.util.Callback<javafx.scene.control.ListView<String>, ListCell<String>> tcCellFactory =
+            lv -> new ListCell<>() {
+                private final Rectangle swatch = new Rectangle(14, 14);
+                private final HBox cell = new HBox(6, swatch, new Label());
+                { cell.setAlignment(Pos.CENTER_LEFT); }
+                @Override protected void updateItem(final String name, final boolean empty) {
+                    super.updateItem(name, empty);
+                    if (empty || name == null) { setGraphic(null); return; }
+                    final int idx = tcCombo.getItems().indexOf(name);
+                    final Color c = idx >= 0 && idx < MdxPreviewFactory.TEAM_COLORS.length
+                            ? MdxPreviewFactory.TEAM_COLORS[idx] : Color.TRANSPARENT;
+                    swatch.setFill(c);
+                    swatch.setArcWidth(4); swatch.setArcHeight(4);
+                    ((Label) cell.getChildren().get(1)).setText(name);
+                    setGraphic(cell);
+                    setText(null);
+                }
+            };
+        tcCombo.setCellFactory(tcCellFactory);
+        tcCombo.setButtonCell(tcCellFactory.call(null));
 
         // Animation speed
         final Label speedLabel = new Label("Speed:");
-        final Slider speedSlider = new Slider(0.1, 4.0, 1.0);
-        speedSlider.setPrefWidth(90);
+        final Slider speedSlider = new Slider(0.1, 2.0, 1.0);
         speedSlider.setMajorTickUnit(1.0);
         speedSlider.setShowTickMarks(true);
+        HBox.setHgrow(speedSlider, Priority.ALWAYS);
         final Label speedValueLabel = new Label("1.0×");
         speedSlider.valueProperty().addListener((obs, o, n) -> {
             animSpeed = n.doubleValue();
@@ -151,41 +182,46 @@ public final class ModelDetailDialog extends Stage {
             if (gridGroup != null) gridGroup.setVisible(gridCheckBox.isSelected());
         });
 
-        final HBox controls = new HBox(8, seqLabel, seqCombo, playBtn, frameSlider, frameLabel,
-                tcLabel, tcCombo, speedLabel, speedSlider, speedValueLabel, gridCheckBox);
-        controls.setAlignment(Pos.CENTER_LEFT);
-        controls.setPadding(new Insets(10, 14, 10, 14));
-        controls.setStyle("-fx-background-color: #12161e;");
+        // Camera view
+        final CheckBox cameraCheckBox = new CheckBox("Camera View");
+        cameraCheckBox.setDisable(true);
 
-        // Diagnostic panel — width controlled by SplitPane divider
+        final HBox seqRow   = new HBox(8, seqLabel, seqCombo);
+        seqRow.setAlignment(Pos.CENTER_LEFT);
+        final HBox playRow  = new HBox(8, playBtn, frameSlider, frameLabel);
+        playRow.setAlignment(Pos.CENTER_LEFT);
+        final HBox tcRow    = new HBox(8, tcLabel, tcCombo);
+        tcRow.setAlignment(Pos.CENTER_LEFT);
+        final HBox speedRow = new HBox(8, speedLabel, speedSlider, speedValueLabel);
+        speedRow.setAlignment(Pos.CENTER_LEFT);
+
+        final VBox animControls = new VBox(10, seqRow, playRow, tcRow, speedRow, gridCheckBox, cameraCheckBox);
+        animControls.setPadding(new Insets(12));
+
+        // Diagnostic panel
         diagArea = new TextArea("Loading…");
         diagArea.setEditable(false);
         diagArea.setWrapText(false);
-        diagArea.setStyle(
-                "-fx-font-family: 'Consolas','Courier New',monospace;" +
-                "-fx-font-size: 11px;" +
-                "-fx-control-inner-background: #0e1118;" +
-                "-fx-text-fill: #c8d4e8;");
+        diagArea.getStyleClass().add("diag-area");
         VBox.setVgrow(diagArea, Priority.ALWAYS);
 
-        final Label diagHeader = new Label("Texture Diagnostics");
-        diagHeader.setStyle(
-                "-fx-font-weight: bold; -fx-font-size: 12px;" +
-                "-fx-text-fill: #8baac8; -fx-padding: 8 8 4 8;");
+        final VBox diagPane = new VBox(diagArea);
 
-        final VBox diagPane = new VBox(diagHeader, diagArea);
-        diagPane.setStyle("-fx-background-color: #0e1118;");
+        // Right panel: two tabs
+        final Tab diagTab = new Tab("Texture Diagnostics", diagPane);
+        diagTab.setClosable(false);
+        final Tab animTab = new Tab("Animation", animControls);
+        animTab.setClosable(false);
+        final TabPane rightTabPane = new TabPane(animTab, diagTab);
 
-        // Horizontal split: 3-D view | diag panel (both resizable)
-        final SplitPane splitPane = new SplitPane(viewStack, diagPane);
+        // Horizontal split: 3-D view | right tab pane
+        final SplitPane splitPane = new SplitPane(viewStack, rightTabPane);
         splitPane.setDividerPositions(VIEW_W / (VIEW_W + DIAG_W));
 
         final BorderPane root = new BorderPane();
         root.setCenter(splitPane);
-        root.setBottom(controls);
-        root.setStyle("-fx-background-color: #1a1e26;");
 
-        final Scene scene = new Scene(root, VIEW_W + DIAG_W, VIEW_H + 56);
+        final Scene scene = new Scene(root, VIEW_W + DIAG_W, VIEW_H);
         scene.getStylesheets().add(getClass().getResource("/styles/app.css").toExternalForm());
         setScene(scene);
         setMinWidth(VIEW_W + DIAG_W);
@@ -202,7 +238,7 @@ public final class ModelDetailDialog extends Stage {
             try {
                 final MdlxModel model = previewFactory.loadModel(mdxFile);
                 Platform.runLater(() -> setupModel(model, mdxFile, rootDirectory,
-                        previewFactory, viewStack, seqCombo, playBtn, frameSlider, frameLabel));
+                        previewFactory, viewStack, seqCombo, playBtn, frameSlider, frameLabel, cameraCheckBox));
             } catch (final Exception e) {
                 Platform.runLater(() -> {
                     viewStack.getChildren().setAll(new Label("Failed to load: " + e.getMessage()));
@@ -224,7 +260,8 @@ public final class ModelDetailDialog extends Stage {
                              final ComboBox<String> seqCombo,
                              final Button playBtn,
                              final Slider frameSlider,
-                             final Label frameLabel) {
+                             final Label frameLabel,
+                             final CheckBox cameraCheckBox) {
         this.loadedModel          = model;
         this.loadedMdxFile        = mdxFile;
         this.loadedRootDirectory  = rootDirectory;
@@ -236,6 +273,10 @@ public final class ModelDetailDialog extends Stage {
         this.renderedGeosets  = new ArrayList<>();
 
         MdxPreviewFactory.BoundsInfo bounds = previewFactory.computeBounds(model);
+        this.modelBounds = bounds;
+        final double boundsMaxDim = !bounds.initialized ? 170.0 :
+                Math.max(bounds.maxX - bounds.minX, Math.max(bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ));
+        this.modelNormScale = boundsMaxDim > 0.0001 ? 170.0 / boundsMaxDim : 1.0;
 
         // Two-pass scene ordering: opaque first (NONE/TRANSPARENT), transparent second (BLEND/ADDITIVE/…).
         // meshViews/renderedGeosets/bindPoseVertices stay in original geoset order for animation.
@@ -311,6 +352,13 @@ public final class ModelDetailDialog extends Stage {
         final Group world = new Group(modelGroup, ambient);
         final SubScene subScene = new SubScene(world, VIEW_W, VIEW_H, true, SceneAntialiasing.BALANCED);
         subScene.setFill(bgColor);
+        // Non-managed: excluded from StackPane preferred-size calculation, stays at (0,0)
+        subScene.setManaged(false);
+        viewStack.widthProperty().addListener((obs, o, n)  -> subScene.setWidth(n.doubleValue()));
+        viewStack.heightProperty().addListener((obs, o, n) -> subScene.setHeight(n.doubleValue()));
+        // Apply current size immediately in case the dialog is already laid out
+        if (viewStack.getWidth()  > 0) subScene.setWidth(viewStack.getWidth());
+        if (viewStack.getHeight() > 0) subScene.setHeight(viewStack.getHeight());
 
         camera = new PerspectiveCamera(true);
         camera.setNearClip(0.1);
@@ -325,7 +373,7 @@ public final class ModelDetailDialog extends Stage {
         final int totalVerts = renderedGeosets.stream().mapToInt(g -> g.vertices.length / 3).sum();
         final int totalTris  = renderedGeosets.stream().mapToInt(g -> g.faces.length  / 3).sum();
         final Label statsLabel = new Label(String.format(
-                "Geosets: %d   Verts: %,d   Tris: %,d\nBones: %d   Seqs: %d",
+                "Geosets  %d%nVerts    %,d%nPolys    %,d%nBones    %d%nSeqs     %d",
                 renderedGeosets.size(), totalVerts, totalTris,
                 model.bones.size(), model.sequences.size()));
         statsLabel.setStyle(
@@ -344,23 +392,41 @@ public final class ModelDetailDialog extends Stage {
         final List<String> seqNames = new ArrayList<>();
         seqNames.add("(Bind Pose)");
         for (final MdlxSequence seq : model.sequences) {
-            seqNames.add(seq.name.isEmpty() ? "(unnamed)" : seq.name);
+            final long bytes = estimateSequenceBytes(model, seq.interval[0], seq.interval[1]);
+            final String base = seq.name.isEmpty() ? "(unnamed)" : seq.name;
+            seqNames.add(base + "  " + formatBytes(bytes));
         }
         seqCombo.setItems(FXCollections.observableList(seqNames));
-        seqCombo.getSelectionModel().selectFirst();
 
+        // Select "Stand" by default (fall back to first sequence)
+        int defaultSeqIdx = 0;
+        for (int i = 0; i < model.sequences.size(); i++) {
+            if (model.sequences.get(i).name.toLowerCase(Locale.ROOT).contains("stand")) {
+                defaultSeqIdx = i;
+                break;
+            }
+        }
         if (!model.sequences.isEmpty()) {
-            selectSequence(0, model, frameSlider, frameLabel);
+            seqCombo.getSelectionModel().select(defaultSeqIdx + 1); // +1 for bind pose entry
+            selectSequence(defaultSeqIdx, model, frameSlider, frameLabel);
+            playing = true;
+            playBtn.setText("⏹ Stop");
+            startAnimation(frameSlider, frameLabel);
+        } else {
+            seqCombo.getSelectionModel().selectFirst();
         }
 
         seqCombo.setOnAction(e -> {
             stopAnimation();
-            playBtn.setText("▶ Play");
-            playing = false;
             final int idx = seqCombo.getSelectionModel().getSelectedIndex() - 1; // -1 for bind pose
             if (idx >= 0 && idx < model.sequences.size()) {
                 selectSequence(idx, model, frameSlider, frameLabel);
+                playing = true;
+                playBtn.setText("⏹ Stop");
+                startAnimation(frameSlider, frameLabel);
             } else {
+                playing = false;
+                playBtn.setText("▶ Play");
                 applyBindPose();
             }
         });
@@ -385,6 +451,18 @@ public final class ModelDetailDialog extends Stage {
                 updateMeshes();
             }
         });
+
+        // Camera view checkbox
+        if (!model.cameras.isEmpty()) {
+            cameraCheckBox.setDisable(false);
+            cameraCheckBox.setOnAction(e -> {
+                if (cameraCheckBox.isSelected()) {
+                    applyCameraView(model.cameras.get(0));
+                } else {
+                    restoreOrbitCamera();
+                }
+            });
+        }
 
         // Populate diagnostic panel
         diagArea.setText(previewFactory.buildTextureDiagnostics(model, mdxFile, rootDirectory));
@@ -608,6 +686,98 @@ public final class ModelDetailDialog extends Stage {
         mesh.getTexCoords().setAll(texCoords);
         mesh.getFaces().setAll(faces);
         return mesh;
+    }
+
+    // -------------------------------------------------------------------------
+    // Camera view
+    // -------------------------------------------------------------------------
+
+    private void applyCameraView(final MdlxCamera wc3Cam) {
+        if (!modelBounds.initialized) return;
+
+        final double cx = (modelBounds.minX + modelBounds.maxX) / 2.0;
+        final double cy = (modelBounds.minY + modelBounds.maxY) / 2.0;
+        final double cz = (modelBounds.minZ + modelBounds.maxZ) / 2.0;
+
+        // Convert WC3 position → JFX space → normalized world space
+        final double px = (wc3Cam.position[0] - cx) * modelNormScale;
+        final double py = (-wc3Cam.position[2] - cy) * modelNormScale;
+        final double pz = (wc3Cam.position[1] - cz) * modelNormScale;
+
+        final double tx = (wc3Cam.targetPosition[0] - cx) * modelNormScale;
+        final double ty = (-wc3Cam.targetPosition[2] - cy) * modelNormScale;
+        final double tz = (wc3Cam.targetPosition[1] - cz) * modelNormScale;
+
+        // Look direction
+        double dx = tx - px, dy = ty - py, dz = tz - pz;
+        final double len = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (len > 0.001) { dx /= len; dy /= len; dz /= len; }
+
+        // Decompose look direction into yaw (Y) + pitch (X) Euler angles
+        final double horizLen = Math.sqrt(dy*dy + dz*dz);
+        final double yaw   = Math.toDegrees(Math.atan2(dx, horizLen));
+        final double pitch = horizLen > 0.001 ? Math.toDegrees(Math.atan2(-dy, dz)) : 0.0;
+
+        modelGroup.getTransforms().clear();
+        camera.setTranslateX(px);
+        camera.setTranslateY(py);
+        camera.setTranslateZ(pz);
+        if (wc3Cam.fieldOfView > 0) camera.setFieldOfView(Math.toDegrees(wc3Cam.fieldOfView));
+        camera.getTransforms().setAll(new Rotate(pitch, Rotate.X_AXIS), new Rotate(yaw, Rotate.Y_AXIS));
+    }
+
+    private void restoreOrbitCamera() {
+        camera.getTransforms().clear();
+        camera.setTranslateX(0);
+        camera.setTranslateY(0);
+        camera.setTranslateZ(-cameraDistance);
+        camera.setFieldOfView(35);
+        modelGroup.getTransforms().setAll(elevationRotate, azimuthRotate);
+    }
+
+    // -------------------------------------------------------------------------
+    // Sequence byte estimation
+    // -------------------------------------------------------------------------
+
+    private static long estimateSequenceBytes(final MdlxModel model, final long start, final long end) {
+        long total = 0;
+        final List<MdlxAnimatedObject> objects = new ArrayList<>();
+        objects.addAll(model.textureAnimations);
+        objects.addAll(model.geosetAnimations);
+        objects.addAll(model.bones);
+        objects.addAll(model.lights);
+        objects.addAll(model.helpers);
+        objects.addAll(model.attachments);
+        objects.addAll(model.particleEmitters);
+        objects.addAll(model.particleEmitters2);
+        objects.addAll(model.ribbonEmitters);
+        objects.addAll(model.cameras);
+        objects.addAll(model.eventObjects);
+        objects.addAll(model.collisionShapes);
+        for (final MdlxAnimatedObject obj : objects) {
+            for (final MdlxTimeline<?> tl : obj.timelines) {
+                total += countBytesInRange(tl, start, end);
+            }
+        }
+        return total;
+    }
+
+    private static long countBytesInRange(final MdlxTimeline<?> tl, final long start, final long end) {
+        if (tl.frames == null || tl.frames.length == 0) return 0;
+        int count = 0;
+        for (final long frame : tl.frames) {
+            if (frame >= start && frame <= end) count++;
+        }
+        if (count == 0) return 0;
+        final long totalBytes = tl.getByteLength();
+        final int totalFrames = tl.frames.length;
+        return totalFrames > 0 ? (totalBytes - 16) / totalFrames * count : 0;
+    }
+
+    private static String formatBytes(final long bytes) {
+        if (bytes <= 0) return "";
+        if (bytes < 1024) return "  [" + bytes + " B]";
+        return String.format("  [%.1f KB]", bytes / 1024.0);
     }
 
     private static float[] buildTexCoords(final MdlxGeoset geoset, final int vertexCount) {
