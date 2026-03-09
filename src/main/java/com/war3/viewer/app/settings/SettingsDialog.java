@@ -12,8 +12,9 @@ import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
-import javafx.scene.control.Separator;
 import javafx.scene.control.Slider;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
@@ -39,17 +40,16 @@ public final class SettingsDialog extends Dialog<Boolean> {
         getDialogPane().getStyleClass().add("settings-dialog");
 
         final AppSettings settings = AppSettings.get();
-
-        // Remember the current theme so we can restore it on Cancel
         final String originalTheme = settings.getTheme();
 
-        // ----- Appearance section -----
-        final Label appearanceLabel = new Label("Appearance");
-        appearanceLabel.getStyleClass().add("settings-section-title");
+        // ── Tab 1: Appearance ─────────────────────────────────────────────
 
-        // Build ComboBox items from the THEMES catalogue
-        final String[] themeIds     = new String[AppSettings.THEMES.length];
-        final String[] themeLabels  = new String[AppSettings.THEMES.length];
+        // Theme picker
+        final Label themeTitle = new Label("Application Theme");
+        themeTitle.getStyleClass().add("settings-section-title");
+
+        final String[] themeIds    = new String[AppSettings.THEMES.length];
+        final String[] themeLabels = new String[AppSettings.THEMES.length];
         int currentThemeIdx = 0;
         for (int i = 0; i < AppSettings.THEMES.length; i++) {
             themeIds[i]    = AppSettings.THEMES[i][0];
@@ -61,28 +61,36 @@ public final class SettingsDialog extends Dialog<Boolean> {
                 FXCollections.observableArrayList(
                         java.util.stream.IntStream.range(0, themeIds.length)
                                 .boxed().toList()));
-        themeCombo.setPrefWidth(300);
+        themeCombo.setPrefWidth(340);
         themeCombo.getSelectionModel().select(currentThemeIdx);
 
-        // Custom cell: coloured dot + name + dark/light badge
         final java.util.function.Supplier<ListCell<Integer>> cellFactory = () -> new ListCell<>() {
             @Override
             protected void updateItem(final Integer idx, final boolean empty) {
                 super.updateItem(idx, empty);
                 if (empty || idx == null) { setGraphic(null); setText(null); return; }
-                final boolean dark = "dark".equals(AppSettings.THEMES[idx][2]);
-                final Circle dot = new Circle(5,
-                        dark ? Color.web("#3b4252") : Color.web("#e5e9f0"));
+                final String variant = AppSettings.THEMES[idx][2];
+                final boolean dark    = "dark".equals(variant);
+                final boolean neutral = "neutral".equals(variant);
+                final Color dotColor = dark    ? Color.web("#3b4252")
+                                     : neutral ? Color.web("#a0a0a0")
+                                               : Color.web("#e5e9f0");
+                final Circle dot = new Circle(5, dotColor);
                 dot.setStroke(Color.web("#88c0d0"));
                 dot.setStrokeWidth(1.5);
-                final Label name = new Label(themeLabels[idx]);
-                final Label badge = new Label(dark ? "dark" : "light");
+                final Label name  = new Label(themeLabels[idx]);
+                final Label badge = new Label(dark ? "dark" : neutral ? "classic" : "light");
                 badge.setStyle(
                         "-fx-font-size: 10px; -fx-padding: 1 5 1 5;" +
                         "-fx-background-radius: 6;" +
-                        (dark ? "-fx-background-color: #3b4252; -fx-text-fill: #88c0d0;"
-                              : "-fx-background-color: #dce5f0; -fx-text-fill: #4c566a;"));
-                final HBox row = new HBox(8, dot, name, badge);
+                        (dark    ? "-fx-background-color: #3b4252; -fx-text-fill: #88c0d0;"
+                         : neutral ? "-fx-background-color: #c8c8c8; -fx-text-fill: #444;"
+                                   : "-fx-background-color: #dce5f0; -fx-text-fill: #4c566a;"));
+                // Separator hint for non-AtlantaFX themes
+                final boolean isBuiltIn = "Modena".equals(themeIds[idx]) || "Caspian".equals(themeIds[idx]);
+                final Label origin = new Label(isBuiltIn ? "JavaFX built-in" : "AtlantaFX");
+                origin.setStyle("-fx-font-size: 9px; -fx-text-fill: #888; -fx-padding: 0 0 0 4;");
+                final HBox row = new HBox(8, dot, name, badge, origin);
                 row.setAlignment(Pos.CENTER_LEFT);
                 setGraphic(row);
                 setText(null);
@@ -91,15 +99,39 @@ public final class SettingsDialog extends Dialog<Boolean> {
         themeCombo.setCellFactory(__ -> cellFactory.get());
         themeCombo.setButtonCell(cellFactory.get());
 
-        // Live preview — apply theme immediately when selection changes
         themeCombo.setOnAction(e -> {
             final int idx = themeCombo.getValue() == null ? 0 : themeCombo.getValue();
             AppSettings.applyTheme(themeIds[idx]);
         });
 
-        // ----- CASC section -----
-        final Label cascLabel = new Label("Warcraft III Game Path (for CASC textures)");
-        cascLabel.getStyleClass().add("settings-section-title");
+        final Label themeNote = new Label(
+                "Note: JavaFX built-in themes (Modena, Caspian) do not support custom panel colours.");
+        themeNote.setStyle("-fx-font-size: 10px; -fx-text-fill: -color-fg-muted;");
+        themeNote.setWrapText(true);
+
+        // 3D viewer background colour
+        final Label viewerTitle = new Label("3D Viewer");
+        viewerTitle.getStyleClass().add("settings-section-title");
+
+        final ColorPicker bgColorPicker = new ColorPicker(safeColor(settings.getViewerBgColor()));
+        bgColorPicker.setPrefWidth(160);
+
+        final GridPane viewerGrid = new GridPane();
+        viewerGrid.setHgap(10);
+        viewerGrid.setVgap(8);
+        viewerGrid.add(new Label("Background Color:"), 0, 0);
+        viewerGrid.add(bgColorPicker, 1, 0);
+
+        final VBox appearanceContent = new VBox(12,
+                themeTitle, themeCombo, themeNote,
+                spacer(8),
+                viewerTitle, viewerGrid);
+        appearanceContent.setPadding(new Insets(14));
+
+        // ── Tab 2: Data Sources ───────────────────────────────────────────
+
+        final Label cascTitle = new Label("Warcraft III Game Path (CASC textures)");
+        cascTitle.getStyleClass().add("settings-section-title");
 
         final TextField gamePathField = new TextField(settings.getGamePath());
         gamePathField.setPromptText("e.g. C:\\Program Files\\Warcraft III");
@@ -121,19 +153,20 @@ public final class SettingsDialog extends Dialog<Boolean> {
         final HBox cascRow = new HBox(8, gamePathField, browseGame);
         cascRow.setAlignment(Pos.CENTER_LEFT);
 
-        // ----- MPQ section -----
-        final Label mpqLabel = new Label("MPQ Archives (legacy, optional)");
-        mpqLabel.getStyleClass().add("settings-section-title");
+        final Label mpqTitle = new Label("MPQ Archives (legacy, optional)");
+        mpqTitle.getStyleClass().add("settings-section-title");
 
         final ListView<String> mpqList = new ListView<>(
                 FXCollections.observableArrayList(settings.getMpqPaths()));
-        mpqList.setPrefHeight(100);
+        mpqList.setPrefHeight(110);
+        VBox.setVgrow(mpqList, Priority.ALWAYS);
 
         final Button addMpq = new Button("Add…");
         addMpq.setOnAction(e -> {
             final FileChooser fc = new FileChooser();
             fc.setTitle("Select MPQ Archive");
-            fc.getExtensionFilters().add(new FileChooser.ExtensionFilter("MPQ Archive", "*.mpq", "*.MPQ", "*.w3x", "*.w3m"));
+            fc.getExtensionFilters().add(
+                    new FileChooser.ExtensionFilter("MPQ Archive", "*.mpq", "*.MPQ", "*.w3x", "*.w3m"));
             final File chosen = fc.showOpenDialog(getOwner());
             if (chosen != null) mpqList.getItems().add(chosen.getAbsolutePath());
         });
@@ -144,15 +177,22 @@ public final class SettingsDialog extends Dialog<Boolean> {
         });
         final HBox mpqButtons = new HBox(8, addMpq, removeMpq);
 
-        // ----- Camera section -----
-        final Label cameraLabel = new Label("Thumbnail Preview Camera");
-        cameraLabel.getStyleClass().add("settings-section-title");
+        final VBox dataSourceContent = new VBox(12,
+                cascTitle, cascRow,
+                spacer(4),
+                mpqTitle, mpqList, mpqButtons);
+        dataSourceContent.setPadding(new Insets(14));
+
+        // ── Tab 3: Viewer / Camera ────────────────────────────────────────
+
+        final Label cameraTitle = new Label("Thumbnail Preview Camera");
+        cameraTitle.getStyleClass().add("settings-section-title");
 
         final Slider azimuthSlider = new Slider(-180, 180, settings.getPreviewAzimuth());
         azimuthSlider.setShowTickLabels(true);
         azimuthSlider.setShowTickMarks(true);
         azimuthSlider.setMajorTickUnit(45);
-        azimuthSlider.setPrefWidth(320);
+        azimuthSlider.setPrefWidth(300);
 
         final Label azimuthValue = new Label(String.format("%.0f°", settings.getPreviewAzimuth()));
         azimuthSlider.valueProperty().addListener((obs, o, n) ->
@@ -162,7 +202,7 @@ public final class SettingsDialog extends Dialog<Boolean> {
         elevationSlider.setShowTickLabels(true);
         elevationSlider.setShowTickMarks(true);
         elevationSlider.setMajorTickUnit(30);
-        elevationSlider.setPrefWidth(320);
+        elevationSlider.setPrefWidth(300);
 
         final Label elevationValue = new Label(String.format("%.0f°", settings.getPreviewElevation()));
         elevationSlider.valueProperty().addListener((obs, o, n) ->
@@ -171,44 +211,33 @@ public final class SettingsDialog extends Dialog<Boolean> {
         final GridPane cameraGrid = new GridPane();
         cameraGrid.setHgap(10);
         cameraGrid.setVgap(8);
-        cameraGrid.add(new Label("Azimuth:"), 0, 0);
-        cameraGrid.add(azimuthSlider, 1, 0);
-        cameraGrid.add(azimuthValue, 2, 0);
+        cameraGrid.add(new Label("Azimuth:"),   0, 0);
+        cameraGrid.add(azimuthSlider,           1, 0);
+        cameraGrid.add(azimuthValue,            2, 0);
         cameraGrid.add(new Label("Elevation:"), 0, 1);
-        cameraGrid.add(elevationSlider, 1, 1);
-        cameraGrid.add(elevationValue, 2, 1);
+        cameraGrid.add(elevationSlider,         1, 1);
+        cameraGrid.add(elevationValue,          2, 1);
 
-        // ----- Viewer section -----
-        final Label viewerLabel = new Label("3D Viewer");
-        viewerLabel.getStyleClass().add("settings-section-title");
+        final VBox viewerContent = new VBox(12, cameraTitle, cameraGrid);
+        viewerContent.setPadding(new Insets(14));
 
-        final ColorPicker bgColorPicker = new ColorPicker(safeColor(settings.getViewerBgColor()));
-        bgColorPicker.setPrefWidth(140);
+        // ── TabPane ───────────────────────────────────────────────────────
 
-        final GridPane viewerGrid = new GridPane();
-        viewerGrid.setHgap(10);
-        viewerGrid.setVgap(8);
-        viewerGrid.add(new Label("Background Color:"), 0, 0);
-        viewerGrid.add(bgColorPicker, 1, 0);
+        final Tab appearanceTab   = new Tab("Appearance",   appearanceContent);
+        final Tab dataSourcesTab  = new Tab("Data Sources", dataSourceContent);
+        final Tab viewerTab       = new Tab("Viewer",       viewerContent);
+        appearanceTab.setClosable(false);
+        dataSourcesTab.setClosable(false);
+        viewerTab.setClosable(false);
 
-        // ----- Layout -----
-        final VBox content = new VBox(14,
-                appearanceLabel, themeCombo,
-                new Separator(),
-                cascLabel, cascRow,
-                new Separator(),
-                mpqLabel, mpqList, mpqButtons,
-                new Separator(),
-                cameraLabel, cameraGrid,
-                new Separator(),
-                viewerLabel, viewerGrid
-        );
-        content.setPadding(new Insets(16));
-        content.setPrefWidth(580);
+        final TabPane tabPane = new TabPane(appearanceTab, dataSourcesTab, viewerTab);
+        tabPane.setPrefWidth(520);
+        tabPane.setPrefHeight(380);
 
-        getDialogPane().setContent(content);
+        getDialogPane().setContent(tabPane);
 
-        // ----- Result converter -----
+        // ── Result converter ──────────────────────────────────────────────
+
         setResultConverter(bt -> {
             if (bt == ButtonType.OK) {
                 final int idx = themeCombo.getValue() == null ? 0 : themeCombo.getValue();
@@ -223,10 +252,15 @@ public final class SettingsDialog extends Dialog<Boolean> {
                 GameDataSource.refresh();
                 return Boolean.TRUE;
             }
-            // Cancel — restore the theme that was active before the dialog opened
             AppSettings.applyTheme(originalTheme);
             return Boolean.FALSE;
         });
+    }
+
+    private static Label spacer(final double height) {
+        final Label l = new Label();
+        l.setMinHeight(height);
+        return l;
     }
 
     private static Color safeColor(final String hex) {

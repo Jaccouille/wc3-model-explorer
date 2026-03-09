@@ -33,15 +33,24 @@ public final class AppSettings {
     private String theme         = "NordDark";
     private String lastRootDirectory = "";
 
-    /** All supported AtlantaFX themes in display order: {id, label, dark?}. */
+    /**
+     * All supported themes in display order: {id, label, dark?}.
+     * AtlantaFX themes provide full visual support (use AtlantaFX CSS variables).
+     * Built-in JavaFX themes (Modena, Caspian) provide standard JavaFX styling;
+     * custom UI elements lose their themed colours but remain fully functional.
+     */
     public static final String[][] THEMES = {
-        { "NordDark",       "Nord Dark",        "dark"  },
-        { "NordLight",      "Nord Light",       "light" },
-        { "Dracula",        "Dracula",          "dark"  },
-        { "CupertinoDark",  "Cupertino Dark",   "dark"  },
-        { "CupertinoLight", "Cupertino Light",  "light" },
-        { "PrimerDark",     "Primer Dark",      "dark"  },
-        { "PrimerLight",    "Primer Light",     "light" },
+        // ── AtlantaFX themes ─────────────────────────────────────────────
+        { "NordDark",       "Nord Dark",        "dark"    },
+        { "NordLight",      "Nord Light",       "light"   },
+        { "Dracula",        "Dracula",          "dark"    },
+        { "CupertinoDark",  "Cupertino Dark",   "dark"    },
+        { "CupertinoLight", "Cupertino Light",  "light"   },
+        { "PrimerDark",     "Primer Dark",      "dark"    },
+        { "PrimerLight",    "Primer Light",     "light"   },
+        // ── Built-in JavaFX themes ────────────────────────────────────────
+        { "Modena",         "Modena",           "light"   },
+        { "Caspian",        "Caspian",          "neutral" },
     };
 
     private AppSettings() {
@@ -136,20 +145,26 @@ public final class AppSettings {
     public void setLastRootDirectory(final String lastRootDirectory) { this.lastRootDirectory = lastRootDirectory; }
 
     /**
-     * Instantiates the AtlantaFX theme matching {@code name} and installs it
-     * as the global user-agent stylesheet — the JavaFX equivalent of
-     * {@code UIManager.setLookAndFeel()} in Swing.
+     * Applies the theme matching {@code name} globally.
+     * AtlantaFX themes are installed via their user-agent stylesheet.
+     * Built-in JavaFX themes (Modena, Caspian) use the platform constants.
      */
     public static void applyTheme(final String name) {
-        final Theme t = switch (name) {
-            case "NordLight"      -> new NordLight();
-            case "Dracula"        -> new Dracula();
-            case "CupertinoDark"  -> new CupertinoDark();
-            case "CupertinoLight" -> new CupertinoLight();
-            case "PrimerDark"     -> new PrimerDark();
-            case "PrimerLight"    -> new PrimerLight();
-            default               -> new NordDark(); // "NordDark" + unknown values
-        };
-        Application.setUserAgentStylesheet(t.getUserAgentStylesheet());
+        switch (name) {
+            case "Modena"  -> Application.setUserAgentStylesheet(Application.STYLESHEET_MODENA);
+            case "Caspian" -> Application.setUserAgentStylesheet(Application.STYLESHEET_CASPIAN);
+            default -> {
+                final Theme t = switch (name) {
+                    case "NordLight"      -> new NordLight();
+                    case "Dracula"        -> new Dracula();
+                    case "CupertinoDark"  -> new CupertinoDark();
+                    case "CupertinoLight" -> new CupertinoLight();
+                    case "PrimerDark"     -> new PrimerDark();
+                    case "PrimerLight"    -> new PrimerLight();
+                    default               -> new NordDark(); // "NordDark" + unknown values
+                };
+                Application.setUserAgentStylesheet(t.getUserAgentStylesheet());
+            }
+        }
     }
 }
