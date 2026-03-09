@@ -1,5 +1,24 @@
+/*
+ * App-specific overrides applied on top of AtlantaFX (NordDark by default).
+ * Standard controls (Button, TextField, ComboBox, Slider, TreeView, ScrollPane,
+ * Dialog, etc.) are styled by AtlantaFX — no need to re-style them here.
+ * Only custom components and layout tweaks go below.
+ *
+ * Key AtlantaFX CSS variables used throughout:
+ *   -color-bg-default      main background
+ *   -color-bg-subtle       slightly raised surface (panels, cards)
+ *   -color-fg-default      primary text
+ *   -color-fg-muted        secondary / dimmed text
+ *   -color-border-default  default border
+ *   -color-border-muted    subtle border
+ *   -color-accent-fg       accent foreground (highlight)
+ *   -color-accent-emphasis filled accent (for selected states)
+ */
+
+/* ── App root ─────────────────────────────────────────────────────── */
+
 .app-root {
-    -fx-background-color: linear-gradient(to bottom, #f4f7fb, #ecf1f8);
+    -fx-background-color: -color-bg-default;
     -fx-font-family: "Aptos", "Segoe UI", "Noto Sans", sans-serif;
 }
 
@@ -7,51 +26,35 @@
     -fx-alignment: center-left;
 }
 
+/* ── Primary / accent button ──────────────────────────────────────── */
+
 .primary-button {
-    -fx-background-color: #1565c0;
-    -fx-text-fill: white;
+    -color-button-bg:         -color-accent-emphasis;
+    -color-button-fg:         white;
+    -color-button-bg-hover:   derive(-color-accent-emphasis, -8%);
+    -color-button-bg-pressed: derive(-color-accent-emphasis, -15%);
+    -color-button-border:     -color-accent-emphasis;
     -fx-background-radius: 10;
-    -fx-padding: 8 14 8 14;
     -fx-font-weight: 700;
 }
 
-.primary-button:hover {
-    -fx-background-color: #0f4e98;
-}
-
-.button {
-    -fx-background-color: #dce5f2;
-    -fx-text-fill: #10253f;
-    -fx-background-radius: 10;
-    -fx-padding: 8 14 8 14;
-}
-
-.button:hover {
-    -fx-background-color: #cbd8ea;
-}
-
-.root-field,
-.search-field {
-    -fx-background-color: white;
-    -fx-border-color: #c9d3e3;
-    -fx-border-radius: 10;
-    -fx-background-radius: 10;
-    -fx-padding: 8 10 8 10;
-}
+/* ── Side panels ──────────────────────────────────────────────────── */
 
 .left-pane,
 .right-pane {
-    -fx-background-color: rgba(255, 255, 255, 0.78);
+    -fx-background-color: -color-bg-subtle;
     -fx-background-radius: 14;
-    -fx-border-color: #d1d9e5;
+    -fx-border-color: -color-border-default;
     -fx-border-radius: 14;
 }
 
 .panel-title {
     -fx-font-size: 14px;
     -fx-font-weight: 700;
-    -fx-text-fill: #203750;
+    -fx-text-fill: -color-fg-default;
 }
+
+/* ── Folder tree (transparent so panel bg shows through) ──────────── */
 
 .folder-tree {
     -fx-background-color: transparent;
@@ -61,14 +64,15 @@
 .folder-tree .tree-cell {
     -fx-background-color: transparent;
     -fx-padding: 5 6 5 6;
-    -fx-text-fill: #26364b;
 }
 
 .folder-tree .tree-cell:selected {
-    -fx-background-color: #dce8f7;
+    -fx-background-color: -color-accent-emphasis;
     -fx-background-radius: 8;
-    -fx-text-fill: #0f2f58;
+    -fx-text-fill: white;
 }
+
+/* ── Thumbnail scroll area ────────────────────────────────────────── */
 
 .thumbnail-scroll {
     -fx-background-color: transparent;
@@ -80,22 +84,25 @@
     -fx-background-color: transparent;
 }
 
+/* ── Model cards ──────────────────────────────────────────────────── */
+
 .asset-card {
-    -fx-background-color: rgba(255, 255, 255, 0.96);
-    -fx-border-color: #cfdae9;
+    -fx-background-color: -color-bg-subtle;
+    -fx-border-color: -color-border-default;
     -fx-border-radius: 14;
     -fx-background-radius: 14;
-    -fx-effect: dropshadow(gaussian, rgba(26, 45, 69, 0.09), 14, 0.2, 0, 4);
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.35), 12, 0.2, 0, 3);
 }
 
 .asset-card:hover {
     -fx-translate-y: -1;
-    -fx-border-color: #8fb2db;
+    -fx-border-color: -color-accent-fg;
+    -fx-cursor: hand;
 }
 
 .preview-pane {
-    -fx-background-color: #e9eef5;
-    -fx-border-color: #c8d3e3;
+    -fx-background-color: -color-bg-default;
+    -fx-border-color: -color-border-muted;
     -fx-border-radius: 10;
     -fx-background-radius: 10;
 }
@@ -103,18 +110,20 @@
 .asset-name {
     -fx-font-size: 13px;
     -fx-font-weight: 700;
-    -fx-text-fill: #1c3047;
+    -fx-text-fill: -color-fg-default;
 }
 
 .asset-path {
     -fx-font-size: 11px;
-    -fx-text-fill: #4a627f;
+    -fx-text-fill: -color-fg-muted;
 }
+
+/* ── Status / error labels ────────────────────────────────────────── */
 
 .preview-error,
 .empty-text,
 .status-text {
-    -fx-text-fill: #4d6079;
+    -fx-text-fill: -color-fg-muted;
 }
 
 .preview-error {
@@ -122,32 +131,10 @@
     -fx-font-weight: 600;
 }
 
-/* Settings dialog */
+/* ── Settings dialog ──────────────────────────────────────────────── */
+
 .settings-section-title {
     -fx-font-size: 13px;
     -fx-font-weight: 700;
-    -fx-text-fill: #203750;
-}
-
-.settings-dialog .dialog-pane {
-    -fx-background-color: #f4f7fb;
-    -fx-font-family: "Aptos", "Segoe UI", "Noto Sans", sans-serif;
-}
-
-/* Combo box */
-.combo-box {
-    -fx-background-color: white;
-    -fx-border-color: #c9d3e3;
-    -fx-border-radius: 8;
-    -fx-background-radius: 8;
-}
-
-/* Slider thumb */
-.slider .thumb {
-    -fx-background-color: #1565c0;
-}
-
-/* Asset card hover pointer */
-.asset-card:hover {
-    -fx-cursor: hand;
+    -fx-text-fill: -color-fg-default;
 }

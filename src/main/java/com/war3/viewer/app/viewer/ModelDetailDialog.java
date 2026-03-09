@@ -1,9 +1,16 @@
 package com.war3.viewer.app.viewer;
 
+import com.hiveworkshop.rms.parsers.mdlx.InterpolationType;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxGeoset;
+import com.hiveworkshop.rms.parsers.mdlx.MdlxGeosetAnimation;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxModel;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxSequence;
+import com.hiveworkshop.rms.parsers.mdlx.AnimationMap;
+import com.hiveworkshop.rms.parsers.mdlx.timeline.MdlxFloatTimeline;
+import com.hiveworkshop.rms.parsers.mdlx.timeline.MdlxTimeline;
+import com.hiveworkshop.rms.util.War3ID;
 import com.war3.viewer.app.MdxPreviewFactory;
+import com.war3.viewer.app.settings.AppSettings;
 import javafx.animation.AnimationTimer;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -16,18 +23,21 @@ import javafx.scene.Scene;
 import javafx.scene.SceneAntialiasing;
 import javafx.scene.SubScene;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.Slider;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.TextArea;
+import javafx.scene.shape.Box;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
+import javafx.scene.paint.PhongMaterial;
 import javafx.scene.shape.CullFace;
 import javafx.scene.shape.MeshView;
 import javafx.scene.shape.TriangleMesh;
@@ -38,7 +48,9 @@ import javafx.stage.Window;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
@@ -46,7 +58,6 @@ public final class ModelDetailDialog extends Stage {
     private static final double VIEW_W = 640;
     private static final double VIEW_H = 480;
     private static final double DIAG_W = 400;
-    private static final Color BG_COLOR = Color.web("#1a1e26");
 
     private TextArea diagArea;
 
@@ -69,11 +80,17 @@ public final class ModelDetailDialog extends Stage {
     private List<MeshView> meshViews;
     private List<float[]> bindPoseVertices; // per-geoset bind-pose XYZ in JavaFX space
     private List<MdlxGeoset> geosets;
+    /** Maps model.geosets index → meshViews index, for geoset animation lookup. */
+    private Map<Integer, Integer> geosetIndexToMeshIndex;
     private AnimationTimer animTimer;
     private long   seqStart, seqEnd;
     private double currentFrame;
     private boolean playing = false;
     private long    lastNanos = -1;
+    private double  animSpeed = 1.0;
+
+    // Scene extras
+    private Group gridGroup;
 
     // Camera / scene
     private final Group    modelGroup = new Group();
@@ -116,8 +133,26 @@ public final class ModelDetailDialog extends Stage {
         tcCombo.getSelectionModel().selectFirst();
         tcCombo.setPrefWidth(120);
 
-        final HBox controls = new HBox(10, seqLabel, seqCombo, playBtn, frameSlider, frameLabel,
-                tcLabel, tcCombo);
+        // Animation speed
+        final Label speedLabel = new Label("Speed:");
+        final Slider speedSlider = new Slider(0.1, 4.0, 1.0);
+        speedSlider.setPrefWidth(90);
+        speedSlider.setMajorTickUnit(1.0);
+        speedSlider.setShowTickMarks(true);
+        final Label speedValueLabel = new Label("1.0×");
+        speedSlider.valueProperty().addListener((obs, o, n) -> {
+            animSpeed = n.doubleValue();
+            speedValueLabel.setText(String.format("%.1f×", n.doubleValue()));
+        });
+
+        // Grid toggle
+        final CheckBox gridCheckBox = new CheckBox("Grid");
+        gridCheckBox.setOnAction(e -> {
+            if (gridGroup != null) gridGroup.setVisible(gridCheckBox.isSelected());
+        });
+
+        final HBox controls = new HBox(8, seqLabel, seqCombo, playBtn, frameSlider, frameLabel,
+                tcLabel, tcCombo, speedLabel, speedSlider, speedValueLabel, gridCheckBox);
         controls.setAlignment(Pos.CENTER_LEFT);
         controls.setPadding(new Insets(10, 14, 10, 14));
         controls.setStyle("-fx-background-color: #12161e;");
@@ -230,6 +265,24 @@ public final class ModelDetailDialog extends Stage {
             else                                               transparentMeshViews.add(mv);
         }
 
+        // Build geoset index → mesh view index mapping for geoset animation lookup
+        this.geosetIndexToMeshIndex = new HashMap<>();
+        for (int mi = 0; mi < renderedGeosets.size(); mi++) {
+            final MdlxGeoset rg = renderedGeosets.get(mi);
+            for (int gi = 0; gi < model.geosets.size(); gi++) {
+                if (model.geosets.get(gi) == rg) {
+                    geosetIndexToMeshIndex.put(gi, mi);
+                    break;
+                }
+            }
+        }
+
+        // Compute the normalized bottom-Y of the model (in modelGroup local space) for grid placement
+        final double maxDim = !bounds.initialized ? 170.0 :
+                Math.max(bounds.maxX - bounds.minX, Math.max(bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ));
+        final double normScale = maxDim > 0.0001 ? 170.0 / maxDim : 1.0;
+        final double gridY = !bounds.initialized ? 85.0 : (bounds.maxY - bounds.minY) / 2.0 * normScale + 1.0;
+
         final Group rawGroup = new Group();
         rawGroup.getChildren().addAll(opaqueMeshViews);
         rawGroup.getChildren().addAll(transparentMeshViews);
@@ -241,7 +294,9 @@ public final class ModelDetailDialog extends Stage {
 
         previewFactory.normalizeGroup(rawGroup, bounds);
 
-        modelGroup.getChildren().setAll(rawGroup);
+        gridGroup = buildGrid(gridY);
+        gridGroup.setVisible(false);
+        modelGroup.getChildren().setAll(rawGroup, gridGroup);
         modelGroup.getTransforms().setAll(elevationRotate, azimuthRotate);
 
         // WC3 SD models are pre-lit: the reference shader (simpleDiffuse.frag) has all
@@ -249,9 +304,13 @@ public final class ModelDetailDialog extends Stage {
         // A single full-white AmbientLight is the exact JavaFX equivalent: no normals needed.
         final AmbientLight ambient = new AmbientLight(Color.WHITE);
 
+        Color bgColor;
+        try { bgColor = Color.web(AppSettings.get().getViewerBgColor()); }
+        catch (final Exception e) { bgColor = Color.web("#1a1e26"); }
+
         final Group world = new Group(modelGroup, ambient);
         final SubScene subScene = new SubScene(world, VIEW_W, VIEW_H, true, SceneAntialiasing.BALANCED);
-        subScene.setFill(BG_COLOR);
+        subScene.setFill(bgColor);
 
         camera = new PerspectiveCamera(true);
         camera.setNearClip(0.1);
@@ -261,6 +320,23 @@ public final class ModelDetailDialog extends Stage {
         subScene.setCamera(camera);
 
         viewStack.getChildren().setAll(subScene);
+
+        // Stats overlay — top-left corner of the 3D view
+        final int totalVerts = renderedGeosets.stream().mapToInt(g -> g.vertices.length / 3).sum();
+        final int totalTris  = renderedGeosets.stream().mapToInt(g -> g.faces.length  / 3).sum();
+        final Label statsLabel = new Label(String.format(
+                "Geosets: %d   Verts: %,d   Tris: %,d\nBones: %d   Seqs: %d",
+                renderedGeosets.size(), totalVerts, totalTris,
+                model.bones.size(), model.sequences.size()));
+        statsLabel.setStyle(
+                "-fx-background-color: rgba(0,0,0,0.50);" +
+                "-fx-text-fill: #a8bdd0;" +
+                "-fx-font-family: 'Consolas','Courier New',monospace;" +
+                "-fx-font-size: 11px;" +
+                "-fx-padding: 5 8 5 8;" +
+                "-fx-background-radius: 0 0 4 0;");
+        StackPane.setAlignment(statsLabel, Pos.TOP_LEFT);
+        viewStack.getChildren().add(statsLabel);
 
         setupOrbit(subScene);
 
@@ -339,7 +415,7 @@ public final class ModelDetailDialog extends Stage {
                 if (lastNanos < 0) { lastNanos = now; return; }
                 final double elapsed = (now - lastNanos) / 1_000_000.0; // ms
                 lastNanos = now;
-                currentFrame += elapsed;
+                currentFrame += elapsed * animSpeed;
                 if (currentFrame > seqEnd) currentFrame = seqStart;
                 frameSlider.setValue(currentFrame);
                 frameLabel.setText("Frame: " + (int) currentFrame);
@@ -358,6 +434,22 @@ public final class ModelDetailDialog extends Stage {
     private void updateMeshes() {
         if (boneAnimator == null) return;
         final long frame = (long) currentFrame;
+
+        // Reset all mesh view opacities to fully visible before applying geoset animations
+        for (final MeshView mv : meshViews) {
+            mv.setOpacity(1.0);
+        }
+
+        // Apply geoset animation alpha (visibility)
+        if (loadedModel != null && geosetIndexToMeshIndex != null) {
+            for (final MdlxGeosetAnimation geosetAnim : loadedModel.geosetAnimations) {
+                final Integer mvIdx = geosetIndexToMeshIndex.get(geosetAnim.geosetId);
+                if (mvIdx == null) continue;
+                final double alpha = sampleGeosetAlpha(geosetAnim, frame);
+                meshViews.get(mvIdx).setOpacity(alpha);
+            }
+        }
+
         int bindIdx = 0;
         for (int gi = 0; gi < geosets.size(); gi++) {
             if (bindIdx >= meshViews.size()) break;
@@ -375,6 +467,36 @@ public final class ModelDetailDialog extends Stage {
         }
     }
 
+    private static final War3ID KGAO_ID = AnimationMap.KGAO.getWar3id();
+
+    private static double sampleGeosetAlpha(final MdlxGeosetAnimation geosetAnim, final long frame) {
+        for (final MdlxTimeline<?> tl : geosetAnim.timelines) {
+            if (tl.name.equals(KGAO_ID) && tl instanceof MdlxFloatTimeline fat) {
+                return sampleFloat1(fat, frame);
+            }
+        }
+        return geosetAnim.alpha;
+    }
+
+    private static float sampleFloat1(final MdlxFloatTimeline tl, final long frame) {
+        if (tl.frames == null || tl.frames.length == 0) return 1f;
+        if (frame <= tl.frames[0]) return tl.values[0][0];
+        final int last = tl.frames.length - 1;
+        if (frame >= tl.frames[last]) return tl.values[last][0];
+
+        int lo = 0, hi = last;
+        while (hi - lo > 1) {
+            final int mid = (lo + hi) >>> 1;
+            if (tl.frames[mid] <= frame) lo = mid; else hi = mid;
+        }
+
+        if (tl.interpolationType == InterpolationType.DONT_INTERP) {
+            return tl.values[lo][0];
+        }
+        final float t = (float) (frame - tl.frames[lo]) / (float) (tl.frames[hi] - tl.frames[lo]);
+        return tl.values[lo][0] + t * (tl.values[hi][0] - tl.values[lo][0]);
+    }
+
     private void refreshMaterials() {
         if (loadedModel == null) return;
         for (int i = 0; i < meshViews.size() && i < renderedGeosets.size(); i++) {
@@ -387,6 +509,7 @@ public final class ModelDetailDialog extends Stage {
     private void applyBindPose() {
         int bindIdx = 0;
         for (final MeshView mv : meshViews) {
+            mv.setOpacity(1.0);
             if (bindIdx < bindPoseVertices.size()) {
                 ((TriangleMesh) mv.getMesh()).getPoints().setAll(bindPoseVertices.get(bindIdx));
             }
@@ -421,6 +544,35 @@ public final class ModelDetailDialog extends Stage {
     // -------------------------------------------------------------------------
     // Utilities
     // -------------------------------------------------------------------------
+
+    /** Build a flat ground grid centred at (0, gridY, 0) in modelGroup local space. */
+    private static Group buildGrid(final double gridY) {
+        final int    HALF    = 200;
+        final int    SPACING = 40;
+        final double THICK   = 2.0;
+        final double HEIGHT  = 1.5;
+
+        final PhongMaterial axisMat = new PhongMaterial(Color.web("#4a5060"));
+        axisMat.setSpecularColor(Color.TRANSPARENT);
+        final PhongMaterial gridMat = new PhongMaterial(Color.web("#252d3a"));
+        gridMat.setSpecularColor(Color.TRANSPARENT);
+
+        final Group g = new Group();
+        for (int i = -HALF; i <= HALF; i += SPACING) {
+            // Line running along X at Z = i
+            final Box lx = new Box(HALF * 2.0, HEIGHT, THICK);
+            lx.setTranslateZ(i);
+            lx.setTranslateY(gridY);
+            lx.setMaterial(i == 0 ? axisMat : gridMat);
+            // Line running along Z at X = i
+            final Box lz = new Box(THICK, HEIGHT, HALF * 2.0);
+            lz.setTranslateX(i);
+            lz.setTranslateY(gridY);
+            lz.setMaterial(i == 0 ? axisMat : gridMat);
+            g.getChildren().addAll(lx, lz);
+        }
+        return g;
+    }
 
     /** Convert WC3 model-space vertices (Y-up) to JavaFX space (Y-down, Z-depth). */
     private static float[] toJfxSpace(final float[] wc3Vertices) {

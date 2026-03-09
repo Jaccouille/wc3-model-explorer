@@ -20,8 +20,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 
 public class ModelCard extends VBox {
-    private static final double PREVIEW_WIDTH = 230;
-    private static final double PREVIEW_HEIGHT = 148;
+    /** Height/width ratio of the preview pane (fixed aspect). */
+    private static final double PREVIEW_ASPECT = 148.0 / 230.0;
 
     private final StackPane previewPane = new StackPane();
 
@@ -29,18 +29,22 @@ public class ModelCard extends VBox {
             final Path mdxFile,
             final Path rootDirectory,
             final MdxPreviewFactory previewFactory,
-            final Executor executor
+            final Executor executor,
+            final int cardWidth
     ) {
+        final double previewW = cardWidth - 22;
+        final double previewH = Math.round(previewW * PREVIEW_ASPECT);
+
         getStyleClass().add("asset-card");
         setSpacing(8);
         setPadding(new Insets(10));
-        setPrefWidth(252);
-        setMaxWidth(252);
+        setPrefWidth(cardWidth);
+        setMaxWidth(cardWidth);
 
         previewPane.getStyleClass().add("preview-pane");
-        previewPane.setPrefSize(PREVIEW_WIDTH, PREVIEW_HEIGHT);
-        previewPane.setMinSize(PREVIEW_WIDTH, PREVIEW_HEIGHT);
-        previewPane.setMaxSize(PREVIEW_WIDTH, PREVIEW_HEIGHT);
+        previewPane.setPrefSize(previewW, previewH);
+        previewPane.setMinSize(previewW, previewH);
+        previewPane.setMaxSize(previewW, previewH);
         VBox.setVgrow(previewPane, Priority.NEVER);
 
         ProgressIndicator indicator = new ProgressIndicator();
@@ -106,7 +110,9 @@ public class ModelCard extends VBox {
         }
 
         try {
-            SubScene subScene = previewFactory.buildSubScene(model, mdxFile, rootDirectory, PREVIEW_WIDTH, PREVIEW_HEIGHT);
+            final double previewW = previewPane.getPrefWidth();
+        final double previewH = previewPane.getPrefHeight();
+        SubScene subScene = previewFactory.buildSubScene(model, mdxFile, rootDirectory, previewW, previewH);
             previewPane.getChildren().setAll(subScene);
         } catch (Exception ignored) {
             showError("Preview unavailable");

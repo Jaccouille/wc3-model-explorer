@@ -27,6 +27,7 @@ dependencies {
     implementation files('libs/JCASC.jar')
     implementation 'com.github.inwc3:JMPQ3:1.7.14'
     implementation 'org.json:json:20240303'
+    implementation 'io.github.mkpaz:atlantafx-base:2.0.1'
 }
 
 application {

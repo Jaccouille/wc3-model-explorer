@@ -1,6 +1,7 @@
 package com.war3.viewer.app;
 
 import com.war3.viewer.app.datasource.GameDataSource;
+import com.war3.viewer.app.settings.AppSettings;
 import com.war3.viewer.app.settings.SettingsDialog;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
@@ -8,6 +9,7 @@ import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
 import javafx.scene.control.Button;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.SplitPane;
@@ -39,10 +41,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 public class AssetBrowserPane extends BorderPane {
+    private static final String[] SIZE_LABELS = {"Extra Large", "Large", "Medium", "Small"};
+    private static final int[]    SIZE_VALUES = {352, 252, 192, 128};
+
     private final Stage ownerStage;
 
     private final TreeView<Path> directoryTree = new TreeView<>();
     private final TilePane tilePane = new TilePane();
+    private int cardWidth = AppSettings.get().getThumbnailSize();
     private final TextField rootField = new TextField();
     private final TextField searchField = new TextField();
     private final Label statusLabel = new Label("Select a root directory to start browsing MDX assets.");
@@ -103,9 +109,29 @@ public class AssetBrowserPane extends BorderPane {
         searchField.getStyleClass().add("search-field");
         searchField.setPrefWidth(260);
 
+        // Thumbnail size picker
+        final ComboBox<String> sizeCombo = new ComboBox<>(
+                FXCollections.observableArrayList(SIZE_LABELS));
+        int sizeIdx = 1; // default = Large
+        for (int i = 0; i < SIZE_VALUES.length; i++) {
+            if (SIZE_VALUES[i] == cardWidth) { sizeIdx = i; break; }
+        }
+        sizeCombo.getSelectionModel().select(sizeIdx);
+        sizeCombo.setPrefWidth(120);
+        sizeCombo.setOnAction(e -> {
+            final int idx = sizeCombo.getSelectionModel().getSelectedIndex();
+            if (idx >= 0 && idx < SIZE_VALUES.length) {
+                cardWidth = SIZE_VALUES[idx];
+                AppSettings.get().setThumbnailSize(cardWidth);
+                AppSettings.save();
+                tilePane.setPrefTileWidth(cardWidth);
+                refreshThumbnails();
+            }
+        });
+
         HBox.setHgrow(rootField, Priority.ALWAYS);
 
-        topBar.getChildren().addAll(chooseRootButton, refreshButton, rootField, searchField, settingsButton);
+        topBar.getChildren().addAll(chooseRootButton, refreshButton, rootField, searchField, sizeCombo, settingsButton);
         return topBar;
     }
 
@@ -130,7 +156,7 @@ public class AssetBrowserPane extends BorderPane {
         tilePane.setHgap(14);
         tilePane.setVgap(14);
         tilePane.setPadding(new Insets(8));
-        tilePane.setPrefTileWidth(252);
+        tilePane.setPrefTileWidth(cardWidth);
         tilePane.setPrefColumns(5);
 
         ScrollPane scrollPane = new ScrollPane(tilePane);
@@ -333,7 +359,7 @@ public class AssetBrowserPane extends BorderPane {
         }
 
         for (Path file : files) {
-            tilePane.getChildren().add(new ModelCard(file, rootDirectory, previewFactory, previewExecutor));
+            tilePane.getChildren().add(new ModelCard(file, rootDirectory, previewFactory, previewExecutor, cardWidth));
         }
 
         statusLabel.setText("Loaded " + files.size() + " model thumbnails.");

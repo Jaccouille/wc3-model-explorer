@@ -1,5 +1,6 @@
 package com.war3.viewer.app;
 
+import com.war3.viewer.app.settings.AppSettings;
 import javafx.application.Application;
 import javafx.scene.Scene;
 import javafx.stage.Stage;
@@ -9,6 +10,9 @@ import javax.imageio.ImageIO;
 public class MainApp extends Application {
     @Override
     public void start(final Stage stage) {
+        // Apply the saved theme (equivalent to UIManager.setLookAndFeel in Swing).
+        AppSettings.applyTheme(AppSettings.get().getTheme());
+
         // Ensure all ImageIO plugins (including BLP) are registered before any texture loading.
         ImageIO.scanForPlugins();
         AssetBrowserPane root = new AssetBrowserPane(stage);
