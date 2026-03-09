@@ -31,6 +31,7 @@ public final class AppSettings {
     private String viewerBgColor = "#1a1e26";
     private int    thumbnailSize = 252;
     private String theme         = "NordDark";
+    private String lastRootDirectory = "";
 
     /** All supported AtlantaFX themes in display order: {id, label, dark?}. */
     public static final String[][] THEMES = {
@@ -68,6 +69,7 @@ public final class AppSettings {
             json.put("viewerBgColor", instance.viewerBgColor);
             json.put("thumbnailSize", instance.thumbnailSize);
             json.put("theme",         instance.theme);
+            json.put("lastRootDirectory", instance.lastRootDirectory);
             try (OutputStream out = Files.newOutputStream(file)) {
                 out.write(json.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             }
@@ -95,6 +97,7 @@ public final class AppSettings {
             s.viewerBgColor = json.optString("viewerBgColor", "#1a1e26");
             s.thumbnailSize = json.optInt("thumbnailSize", 252);
             s.theme         = json.optString("theme", "NordDark");
+            s.lastRootDirectory = json.optString("lastRootDirectory", "");
         } catch (final Exception e) {
             e.printStackTrace();
         }
@@ -128,6 +131,9 @@ public final class AppSettings {
 
     public String getTheme() { return theme; }
     public void setTheme(final String theme) { this.theme = theme; }
+
+    public String getLastRootDirectory() { return lastRootDirectory; }
+    public void setLastRootDirectory(final String lastRootDirectory) { this.lastRootDirectory = lastRootDirectory; }
 
     /**
      * Instantiates the AtlantaFX theme matching {@code name} and installs it

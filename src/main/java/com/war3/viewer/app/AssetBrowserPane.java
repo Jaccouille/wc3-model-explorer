@@ -77,6 +77,14 @@ public class AssetBrowserPane extends BorderPane {
 
         configureInteractions();
         refreshDataSourceStatus();
+
+        String lastRoot = AppSettings.get().getLastRootDirectory();
+        if (lastRoot != null && !lastRoot.isEmpty()) {
+            Path lastRootPath = Path.of(lastRoot);
+            if (Files.isDirectory(lastRootPath)) {
+                setRootDirectory(lastRootPath);
+            }
+        }
     }
 
     private HBox buildTopBar() {
@@ -233,6 +241,14 @@ public class AssetBrowserPane extends BorderPane {
 
         if (rootDirectory != null && Files.isDirectory(rootDirectory)) {
             chooser.setInitialDirectory(rootDirectory.toFile());
+        } else {
+            String lastRoot = AppSettings.get().getLastRootDirectory();
+            if (lastRoot != null && !lastRoot.isEmpty()) {
+                Path lastRootPath = Path.of(lastRoot);
+                if (Files.isDirectory(lastRootPath)) {
+                    chooser.setInitialDirectory(lastRootPath.toFile());
+                }
+            }
         }
 
         File selected = chooser.showDialog(ownerStage);
@@ -244,6 +260,8 @@ public class AssetBrowserPane extends BorderPane {
     private void setRootDirectory(final Path directory) {
         rootDirectory = directory.toAbsolutePath().normalize();
         rootField.setText(rootDirectory.toString());
+        AppSettings.get().setLastRootDirectory(rootDirectory.toString());
+        AppSettings.save();
 
         DirectoryTreeItem rootItem = createDirectoryItem(rootDirectory);
         directoryTree.setRoot(rootItem);
