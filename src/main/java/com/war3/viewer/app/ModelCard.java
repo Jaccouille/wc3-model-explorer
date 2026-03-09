@@ -2,17 +2,25 @@ package com.war3.viewer.app;
 
 import com.hiveworkshop.rms.parsers.mdlx.MdlxModel;
 import com.war3.viewer.app.viewer.ModelDetailDialog;
+import javafx.animation.KeyFrame;
+import javafx.animation.KeyValue;
+import javafx.animation.Timeline;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.SubScene;
 import javafx.scene.control.Label;
-import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.Tooltip;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
+import javafx.scene.paint.Color;
+import javafx.scene.paint.CycleMethod;
+import javafx.scene.paint.LinearGradient;
+import javafx.scene.paint.Stop;
+import javafx.scene.shape.Rectangle;
+import javafx.util.Duration;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -24,6 +32,7 @@ public class ModelCard extends VBox {
     private static final double PREVIEW_ASPECT = 148.0 / 230.0;
 
     private final StackPane previewPane = new StackPane();
+    private Timeline shimmerTimeline;
 
     public ModelCard(
             final Path mdxFile,
@@ -47,9 +56,7 @@ public class ModelCard extends VBox {
         previewPane.setMaxSize(previewW, previewH);
         VBox.setVgrow(previewPane, Priority.NEVER);
 
-        ProgressIndicator indicator = new ProgressIndicator();
-        indicator.setPrefSize(24, 24);
-        previewPane.getChildren().setAll(indicator);
+        startShimmer(previewW, previewH);
 
         Label nameLabel = new Label(mdxFile.getFileName().toString());
         nameLabel.getStyleClass().add("asset-name");
@@ -73,6 +80,44 @@ public class ModelCard extends VBox {
         });
 
         loadPreviewAsync(mdxFile, rootDirectory, previewFactory, executor);
+    }
+
+    private void startShimmer(final double w, final double h) {
+        // Solid background tile
+        final Rectangle base = new Rectangle(w, h);
+        base.getStyleClass().add("shimmer-base");
+        base.setArcWidth(10);
+        base.setArcHeight(10);
+
+        // Translucent sweep that travels left → right
+        final double glowW = w * 0.55;
+        final Rectangle glow = new Rectangle(glowW, h);
+        glow.setFill(new LinearGradient(0, 0, 1, 0, true, CycleMethod.NO_CYCLE,
+                new Stop(0.0, Color.TRANSPARENT),
+                new Stop(0.5, Color.rgb(255, 255, 255, 0.09)),
+                new Stop(1.0, Color.TRANSPARENT)));
+
+        // Clip so the glow doesn't bleed outside the rounded card
+        final Rectangle clip = new Rectangle(w, h);
+        clip.setArcWidth(10);
+        clip.setArcHeight(10);
+        previewPane.setClip(clip);
+
+        shimmerTimeline = new Timeline(
+                new KeyFrame(Duration.ZERO,        new KeyValue(glow.translateXProperty(), -glowW)),
+                new KeyFrame(Duration.seconds(1.4), new KeyValue(glow.translateXProperty(), w + glowW)));
+        shimmerTimeline.setCycleCount(Timeline.INDEFINITE);
+        shimmerTimeline.play();
+
+        previewPane.getChildren().setAll(base, glow);
+    }
+
+    private void stopShimmer() {
+        if (shimmerTimeline != null) {
+            shimmerTimeline.stop();
+            shimmerTimeline = null;
+        }
+        previewPane.setClip(null);
     }
 
     private void loadPreviewAsync(
@@ -111,8 +156,9 @@ public class ModelCard extends VBox {
 
         try {
             final double previewW = previewPane.getPrefWidth();
-        final double previewH = previewPane.getPrefHeight();
-        SubScene subScene = previewFactory.buildSubScene(model, mdxFile, rootDirectory, previewW, previewH);
+            final double previewH = previewPane.getPrefHeight();
+            final SubScene subScene = previewFactory.buildSubScene(model, mdxFile, rootDirectory, previewW, previewH);
+            stopShimmer();
             previewPane.getChildren().setAll(subScene);
         } catch (Exception ignored) {
             showError("Preview unavailable");
@@ -120,7 +166,8 @@ public class ModelCard extends VBox {
     }
 
     private void showError(final String message) {
-        Label error = new Label(message);
+        stopShimmer();
+        final Label error = new Label(message);
         error.getStyleClass().add("preview-error");
         previewPane.getChildren().setAll(error);
     }

@@ -131,6 +131,12 @@
     -fx-font-weight: 600;
 }
 
+/* ── Thumbnail shimmer loader ─────────────────────────────────────── */
+
+.shimmer-base {
+    -fx-fill: -color-bg-subtle;
+}
+
 /* ── Settings dialog ──────────────────────────────────────────────── */
 
 .settings-section-title {
