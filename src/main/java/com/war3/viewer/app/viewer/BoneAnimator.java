@@ -60,12 +60,13 @@ public final class BoneAnimator {
      * @param frame       frame number within the sequence's interval
      * @return float[] of length vertexCount * 3 in WC3 (Y-up) space
      */
-    public float[] computeAnimatedVertices(final int geosetIndex, final long frame) {
+    public float[] computeAnimatedVertices(final int geosetIndex, final long frame,
+                                            final long seqStart, final long seqEnd) {
         final MdlxGeoset geoset = model.geosets.get(geosetIndex);
         final int vertexCount = geoset.vertices.length / 3;
         final float[] result = new float[geoset.vertices.length];
 
-        final Matrix4f[] worldTransforms = buildWorldTransforms(frame);
+        final Matrix4f[] worldTransforms = buildWorldTransforms(frame, seqStart, seqEnd);
 
         // Precompute prefix sums for matrixGroups to locate group offsets
         final long[] matrixGroupOffsets = new long[geoset.matrixGroups.length + 1];
@@ -129,16 +130,16 @@ public final class BoneAnimator {
         return worldTransforms[nodeIdx].transformPoint(vx, vy, vz);
     }
 
-    private Matrix4f[] buildWorldTransforms(final long frame) {
+    private Matrix4f[] buildWorldTransforms(final long frame, final long seqStart, final long seqEnd) {
         final Matrix4f[] world = new Matrix4f[allNodes.size()];
 
         // Iterate in topological order so every parent is computed before its children.
         for (final int i : topoOrder) {
             final MdlxGenericObject node = allNodes.get(i);
             final float[] pivot = getPivot(node.objectId);
-            final float[] trans = getTimeline3(node, AnimationMap.KGTR, frame, IDENTITY_TRANS);
-            final float[] rot   = getTimeline4(node, AnimationMap.KGRT, frame, IDENTITY_ROT);
-            final float[] sc    = getTimeline3(node, AnimationMap.KGSC, frame, IDENTITY_SCALE);
+            final float[] trans = getTimeline3(node, AnimationMap.KGTR, frame, seqStart, seqEnd, IDENTITY_TRANS);
+            final float[] rot   = getTimeline4(node, AnimationMap.KGRT, frame, seqStart, seqEnd, IDENTITY_ROT);
+            final float[] sc    = getTimeline3(node, AnimationMap.KGSC, frame, seqStart, seqEnd, IDENTITY_SCALE);
 
             final Matrix4f local = Matrix4f.boneLocal(trans, rot, sc, pivot);
             final int parentIdx = parentIndices[i];
@@ -159,11 +160,12 @@ public final class BoneAnimator {
 
     @SuppressWarnings("unchecked")
     private float[] getTimeline3(final MdlxGenericObject node, final AnimationMap map,
-                                  final long frame, final float[] defaultVal) {
+                                  final long frame, final long seqStart, final long seqEnd,
+                                  final float[] defaultVal) {
         final War3ID id = map.getWar3id();
         for (final MdlxTimeline<?> tl : node.timelines) {
             if (tl.name.equals(id) && tl instanceof MdlxFloatArrayTimeline fat) {
-                return sampleFloat3(fat, frame, defaultVal);
+                return sampleFloat3(fat, frame, seqStart, seqEnd, defaultVal);
             }
         }
         return defaultVal;
@@ -171,38 +173,68 @@ public final class BoneAnimator {
 
     @SuppressWarnings("unchecked")
     private float[] getTimeline4(final MdlxGenericObject node, final AnimationMap map,
-                                  final long frame, final float[] defaultVal) {
+                                  final long frame, final long seqStart, final long seqEnd,
+                                  final float[] defaultVal) {
         final War3ID id = map.getWar3id();
         for (final MdlxTimeline<?> tl : node.timelines) {
             if (tl.name.equals(id) && tl instanceof MdlxFloatArrayTimeline fat) {
-                return sampleFloat4(fat, frame, defaultVal);
+                return sampleFloat4(fat, frame, seqStart, seqEnd, defaultVal);
             }
         }
         return defaultVal;
     }
 
     private static float[] sampleFloat3(final MdlxFloatArrayTimeline tl, final long frame,
+                                         final long seqStart, final long seqEnd,
                                          final float[] defaultVal) {
         if (tl.frames == null || tl.frames.length == 0) return defaultVal;
-        return sampleFloatArray(tl, frame, defaultVal, 3);
+        return sampleFloatArray(tl, frame, seqStart, seqEnd, defaultVal, 3);
     }
 
     private static float[] sampleFloat4(final MdlxFloatArrayTimeline tl, final long frame,
+                                         final long seqStart, final long seqEnd,
                                          final float[] defaultVal) {
         if (tl.frames == null || tl.frames.length == 0) return defaultVal;
-        return sampleFloatArray(tl, frame, defaultVal, 4);
+        return sampleFloatArray(tl, frame, seqStart, seqEnd, defaultVal, 4);
     }
 
     private static float[] sampleFloatArray(final MdlxFloatArrayTimeline tl, final long frame,
+                                             final long seqStart, final long seqEnd,
                                              final float[] defaultVal, final int size) {
         final long[] frames = tl.frames;
         final float[][] values = tl.values;
 
-        if (frame <= frames[0]) return values[0];
-        if (frame >= frames[frames.length - 1]) return values[frames.length - 1];
+        // Locate the first keyframe within [seqStart, seqEnd] via binary search
+        int firstIdx;
+        {
+            int lo = 0, hi = frames.length;
+            while (lo < hi) { final int mid = (lo + hi) >>> 1; if (frames[mid] < seqStart) lo = mid + 1; else hi = mid; }
+            firstIdx = lo;
+        }
+        if (firstIdx >= frames.length || frames[firstIdx] > seqEnd) return defaultVal;
 
-        // Find bracket
-        int lo = 0, hi = frames.length - 1;
+        // Locate the last keyframe within [seqStart, seqEnd]
+        int lastIdx;
+        {
+            int lo = firstIdx, hi = frames.length - 1;
+            while (lo < hi) { final int mid = (lo + hi + 1) >>> 1; if (frames[mid] <= seqEnd) lo = mid; else hi = mid - 1; }
+            lastIdx = lo;
+        }
+
+        // Before (or at) the first key in this sequence
+        if (frame <= frames[firstIdx]) return values[firstIdx];
+
+        // After the last key in this sequence: interpolate toward first key to loop cleanly
+        if (frame > frames[lastIdx]) {
+            if (tl.interpolationType == InterpolationType.DONT_INTERP || frames[lastIdx] >= seqEnd) {
+                return values[lastIdx];
+            }
+            final float t = (float) (frame - frames[lastIdx]) / (float) (seqEnd - frames[lastIdx]);
+            return interpolate(values[lastIdx], values[firstIdx], t, size);
+        }
+
+        // Normal case: find the bracket within the sequence
+        int lo = firstIdx, hi = lastIdx;
         while (hi - lo > 1) {
             final int mid = (lo + hi) >>> 1;
             if (frames[mid] <= frame) lo = mid; else hi = mid;
@@ -212,12 +244,12 @@ public final class BoneAnimator {
             return values[lo];
         }
 
-        // LINEAR
         final float t = (float) (frame - frames[lo]) / (float) (frames[hi] - frames[lo]);
-        if (size == 4) {
-            return slerp(values[lo], values[hi], t);
-        }
-        final float[] a = values[lo], b = values[hi];
+        return interpolate(values[lo], values[hi], t, size);
+    }
+
+    private static float[] interpolate(final float[] a, final float[] b, final float t, final int size) {
+        if (size == 4) return slerp(a, b, t);
         final float[] out = new float[size];
         for (int i = 0; i < size; i++) out[i] = a[i] + t * (b[i] - a[i]);
         return out;

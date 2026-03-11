@@ -21,12 +21,15 @@ import javafx.geometry.Pos;
 import javafx.scene.AmbientLight;
 import javafx.scene.Group;
 import javafx.scene.PerspectiveCamera;
+import javafx.scene.PointLight;
 import javafx.scene.Scene;
 import javafx.scene.SceneAntialiasing;
 import javafx.scene.SubScene;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.ToggleButton;
+import javafx.scene.control.ToggleGroup;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ProgressIndicator;
@@ -66,6 +69,9 @@ public final class ModelDetailDialog extends Stage {
     private static final double VIEW_H = 480;
     private static final double DIAG_W = 400;
 
+    private enum ShadingMode { SOLID, TEXTURE, LIT }
+    private ShadingMode shadingMode = ShadingMode.TEXTURE;
+
     private TextArea diagArea;
 
     // Held for material refresh when team color changes
@@ -102,6 +108,13 @@ public final class ModelDetailDialog extends Stage {
     // Bounds / normalization (set in setupModel, used by camera view)
     private MdxPreviewFactory.BoundsInfo modelBounds;
     private double modelNormScale;
+
+    // Shading lights (toggled per mode)
+    private AmbientLight ambientLight;
+    private PointLight   pointLight;
+
+    // Cached resolved materials parallel to meshViews (for shading mode swap)
+    private final List<javafx.scene.paint.Material> resolvedMaterials = new ArrayList<>();
 
     // Camera / scene
     private final Group    modelGroup = new Group();
@@ -271,6 +284,7 @@ public final class ModelDetailDialog extends Stage {
         this.meshViews     = new ArrayList<>();
         this.bindPoseVertices = new ArrayList<>();
         this.renderedGeosets  = new ArrayList<>();
+        this.resolvedMaterials.clear();
 
         MdxPreviewFactory.BoundsInfo bounds = previewFactory.computeBounds(model);
         this.modelBounds = bounds;
@@ -298,7 +312,9 @@ public final class ModelDetailDialog extends Stage {
 
             final MeshView mv = new MeshView(mesh);
             mv.setCullFace(CullFace.NONE);
-            mv.setMaterial(previewFactory.resolveMaterialPublic(model, geoset, mdxFile, rootDirectory, teamColorIndex));
+            final javafx.scene.paint.Material mat = previewFactory.resolveMaterialPublic(model, geoset, mdxFile, rootDirectory, teamColorIndex);
+            mv.setMaterial(mat);
+            resolvedMaterials.add(mat);
             meshViews.add(mv);
             renderedGeosets.add(geoset);
 
@@ -343,13 +359,20 @@ public final class ModelDetailDialog extends Stage {
         // WC3 SD models are pre-lit: the reference shader (simpleDiffuse.frag) has all
         // dynamic lighting commented out — FragColor = texel * geosetColor(1,1,1,1).
         // A single full-white AmbientLight is the exact JavaFX equivalent: no normals needed.
-        final AmbientLight ambient = new AmbientLight(Color.WHITE);
+        ambientLight = new AmbientLight(Color.WHITE);
+
+        // Point light used in LIT shading mode (front-right-top, in world space)
+        pointLight = new PointLight(Color.WHITE);
+        pointLight.setTranslateX(250);
+        pointLight.setTranslateY(-300);
+        pointLight.setTranslateZ(-200);
+        pointLight.setLightOn(false); // off by default (TEXTURE mode)
 
         Color bgColor;
         try { bgColor = Color.web(AppSettings.get().getViewerBgColor()); }
         catch (final Exception e) { bgColor = Color.web("#1a1e26"); }
 
-        final Group world = new Group(modelGroup, ambient);
+        final Group world = new Group(modelGroup, ambientLight, pointLight);
         final SubScene subScene = new SubScene(world, VIEW_W, VIEW_H, true, SceneAntialiasing.BALANCED);
         subScene.setFill(bgColor);
         // Non-managed: excluded from StackPane preferred-size calculation, stays at (0,0)
@@ -385,6 +408,25 @@ public final class ModelDetailDialog extends Stage {
                 "-fx-background-radius: 0 0 4 0;");
         StackPane.setAlignment(statsLabel, Pos.TOP_LEFT);
         viewStack.getChildren().add(statsLabel);
+
+        // Shading mode toggle (Blender-style, top-right overlay)
+        final ToggleGroup shadingGroup = new ToggleGroup();
+        final ToggleButton solidBtn   = new ToggleButton("Solid");
+        final ToggleButton textureBtn = new ToggleButton("Texture");
+        final ToggleButton litBtn     = new ToggleButton("Lit");
+        solidBtn.setToggleGroup(shadingGroup);
+        textureBtn.setToggleGroup(shadingGroup);
+        litBtn.setToggleGroup(shadingGroup);
+        textureBtn.setSelected(true);
+        solidBtn.setOnAction(e   -> applyShadingMode(ShadingMode.SOLID));
+        textureBtn.setOnAction(e -> applyShadingMode(ShadingMode.TEXTURE));
+        litBtn.setOnAction(e     -> applyShadingMode(ShadingMode.LIT));
+        final HBox shadingBar = new HBox(1, solidBtn, textureBtn, litBtn);
+        shadingBar.setPadding(new Insets(6));
+        shadingBar.setMaxWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+        shadingBar.setMaxHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        StackPane.setAlignment(shadingBar, Pos.TOP_RIGHT);
+        viewStack.getChildren().add(shadingBar);
 
         setupOrbit(subScene);
 
@@ -537,7 +579,7 @@ public final class ModelDetailDialog extends Stage {
                     geoset.faces == null || geoset.faces.length < 3) continue;
 
             final MeshView mv = meshViews.get(bindIdx);
-            final float[] animated = boneAnimator.computeAnimatedVertices(gi, frame);
+            final float[] animated = boneAnimator.computeAnimatedVertices(gi, frame, seqStart, seqEnd);
             final float[] jfxAnimated = toJfxSpace(animated);
 
             ((TriangleMesh) mv.getMesh()).getPoints().setAll(jfxAnimated);
@@ -577,10 +619,42 @@ public final class ModelDetailDialog extends Stage {
 
     private void refreshMaterials() {
         if (loadedModel == null) return;
-        for (int i = 0; i < meshViews.size() && i < renderedGeosets.size(); i++) {
-            meshViews.get(i).setMaterial(loadedPreviewFactory.resolveMaterialPublic(
-                    loadedModel, renderedGeosets.get(i),
-                    loadedMdxFile, loadedRootDirectory, teamColorIndex));
+        resolvedMaterials.clear();
+        for (final MdlxGeoset rg : renderedGeosets) {
+            resolvedMaterials.add(loadedPreviewFactory.resolveMaterialPublic(
+                    loadedModel, rg, loadedMdxFile, loadedRootDirectory, teamColorIndex));
+        }
+        // Re-apply shading mode so the updated materials are reflected correctly
+        if (shadingMode != ShadingMode.SOLID) applyShadingMode(shadingMode);
+    }
+
+    private void applyShadingMode(final ShadingMode mode) {
+        this.shadingMode = mode;
+        if (meshViews == null || meshViews.isEmpty()) return;
+        switch (mode) {
+            case SOLID -> {
+                if (ambientLight != null) ambientLight.setColor(Color.WHITE);
+                if (pointLight   != null) pointLight.setLightOn(false);
+                for (final MeshView mv : meshViews) {
+                    final PhongMaterial mat = new PhongMaterial(Color.web("#b2b2b2"));
+                    mat.setSpecularColor(Color.TRANSPARENT);
+                    mv.setMaterial(mat);
+                }
+            }
+            case TEXTURE -> {
+                if (ambientLight != null) ambientLight.setColor(Color.WHITE);
+                if (pointLight   != null) pointLight.setLightOn(false);
+                for (int i = 0; i < meshViews.size() && i < resolvedMaterials.size(); i++) {
+                    meshViews.get(i).setMaterial(resolvedMaterials.get(i));
+                }
+            }
+            case LIT -> {
+                if (ambientLight != null) ambientLight.setColor(Color.gray(0.25));
+                if (pointLight   != null) pointLight.setLightOn(true);
+                for (int i = 0; i < meshViews.size() && i < resolvedMaterials.size(); i++) {
+                    meshViews.get(i).setMaterial(resolvedMaterials.get(i));
+                }
+            }
         }
     }
 
