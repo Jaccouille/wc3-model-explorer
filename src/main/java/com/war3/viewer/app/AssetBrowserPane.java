@@ -1,5 +1,6 @@
 package com.war3.viewer.app;
 
+import com.hiveworkshop.rms.parsers.mdlx.MdlxModel;
 import com.war3.viewer.app.datasource.GameDataSource;
 import com.war3.viewer.app.settings.AppSettings;
 import com.war3.viewer.app.settings.SettingsDialog;
@@ -9,12 +10,17 @@ import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
+import javafx.geometry.Orientation;
+import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.Separator;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.TextField;
+import javafx.scene.control.TextFormatter;
+import javafx.scene.control.ToggleButton;
 import javafx.scene.control.TreeCell;
 import javafx.scene.control.TreeItem;
 import javafx.scene.control.TreeView;
@@ -35,6 +41,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -64,6 +71,16 @@ public class AssetBrowserPane extends BorderPane {
     private final MdxPreviewFactory previewFactory = new MdxPreviewFactory();
     private final PauseTransition searchDebounce = new PauseTransition(Duration.millis(240));
     private final AtomicInteger refreshCounter = new AtomicInteger();
+
+    // Advanced search index and filter UI
+    private final ConcurrentHashMap<Path, ModelMetadata> modelIndex = new ConcurrentHashMap<>();
+    private VBox      filterPanel;
+    private TextField animField, texField;
+    private TextField polyMinField, polyMaxField;
+    private TextField sizeMinKbField, sizeMaxKbField;
+
+    private enum PortraitFilter { ALL, MODELS_ONLY, PORTRAITS_ONLY }
+    private PortraitFilter portraitFilter = PortraitFilter.MODELS_ONLY;
 
     private Path rootDirectory;
 
@@ -118,6 +135,29 @@ public class AssetBrowserPane extends BorderPane {
         searchField.getStyleClass().add("search-field");
         searchField.setPrefWidth(260);
 
+        final ComboBox<String> portraitCombo = new ComboBox<>(
+                FXCollections.observableArrayList("Models + Portraits", "Models only", "Portraits only"));
+        portraitCombo.getSelectionModel().select(1); // default: Models only
+        portraitCombo.setPrefWidth(150);
+        portraitCombo.setOnAction(e -> {
+            portraitFilter = switch (portraitCombo.getSelectionModel().getSelectedIndex()) {
+                case 0 -> PortraitFilter.ALL;
+                case 2 -> PortraitFilter.PORTRAITS_ONLY;
+                default -> PortraitFilter.MODELS_ONLY;
+            };
+            searchDebounce.playFromStart();
+        });
+
+        final ToggleButton filterToggle = new ToggleButton("Filter ▼");
+        filterToggle.selectedProperty().addListener((obs, was, now) -> {
+            if (filterPanel != null) {
+                filterPanel.setVisible(now);
+                filterPanel.setManaged(now);
+                filterToggle.setText(now ? "Filter ▲" : "Filter ▼");
+                searchDebounce.playFromStart();
+            }
+        });
+
         // Thumbnail size picker
         final ComboBox<String> sizeCombo = new ComboBox<>(
                 FXCollections.observableArrayList(SIZE_LABELS));
@@ -140,7 +180,7 @@ public class AssetBrowserPane extends BorderPane {
 
         HBox.setHgrow(rootField, Priority.ALWAYS);
 
-        topBar.getChildren().addAll(chooseRootButton, refreshButton, rootField, searchField, sizeCombo, settingsButton);
+        topBar.getChildren().addAll(chooseRootButton, refreshButton, rootField, searchField, portraitCombo, filterToggle, sizeCombo, settingsButton);
         return topBar;
     }
 
@@ -182,11 +222,50 @@ public class AssetBrowserPane extends BorderPane {
         Label gridHeader = new Label("Model Thumbnails");
         gridHeader.getStyleClass().add("panel-title");
 
+        filterPanel = buildFilterPanel();
+
         VBox.setVgrow(scrollPane, Priority.ALWAYS);
-        rightPane.getChildren().addAll(gridHeader, scrollPane);
+        rightPane.getChildren().addAll(gridHeader, filterPanel, scrollPane);
 
         splitPane.getItems().addAll(leftPane, rightPane);
         return splitPane;
+    }
+
+    private VBox buildFilterPanel() {
+        animField      = new TextField();
+        animField.setPromptText("e.g. stand");
+        animField.setPrefWidth(160);
+        texField       = new TextField();
+        texField.setPromptText("e.g. footman.blp");
+        texField.setPrefWidth(160);
+        polyMinField   = numericField("Min");
+        polyMaxField   = numericField("Max");
+        sizeMinKbField = numericField("Min KB");
+        sizeMaxKbField = numericField("Max KB");
+
+        final Button clearBtn = new Button("Clear");
+        clearBtn.setOnAction(e -> clearAdvancedFilters());
+
+        final HBox row1 = new HBox(6,
+                new Label("Animation:"), animField,
+                new Label("Texture path:"), texField,
+                clearBtn);
+        row1.setAlignment(Pos.CENTER_LEFT);
+
+        final Separator sep = new Separator(Orientation.VERTICAL);
+        sep.setPadding(new Insets(0, 4, 0, 4));
+        final HBox row2 = new HBox(6,
+                new Label("Polys:"), polyMinField, new Label("–"), polyMaxField,
+                sep,
+                new Label("Size (KB):"), sizeMinKbField, new Label("–"), sizeMaxKbField);
+        row2.setAlignment(Pos.CENTER_LEFT);
+
+        final VBox panel = new VBox(6, row1, row2);
+        panel.setPadding(new Insets(6, 8, 6, 8));
+        panel.setStyle("-fx-background-color: -color-bg-subtle; -fx-background-radius: 4;");
+        panel.setVisible(false);
+        panel.setManaged(false);
+        return panel;
     }
 
     private VBox buildFooter() {
@@ -210,6 +289,11 @@ public class AssetBrowserPane extends BorderPane {
     private void configureInteractions() {
         searchDebounce.setOnFinished(event -> refreshThumbnails());
         searchField.textProperty().addListener((obs, oldText, newText) -> searchDebounce.playFromStart());
+
+        for (TextField tf : new TextField[]{animField, texField,
+                polyMinField, polyMaxField, sizeMinKbField, sizeMaxKbField}) {
+            tf.textProperty().addListener((obs, o, n) -> searchDebounce.playFromStart());
+        }
 
         directoryTree.getSelectionModel().selectedItemProperty().addListener((obs, oldItem, newItem) -> refreshThumbnails());
     }
@@ -330,11 +414,12 @@ public class AssetBrowserPane extends BorderPane {
                 ? ""
                 : searchField.getText().trim().toLowerCase(Locale.ROOT);
 
+        final FilterState fs = captureFilterState();
         int requestId = refreshCounter.incrementAndGet();
         statusLabel.setText("Scanning " + selectedDirectory + " ...");
 
         CompletableFuture
-                .supplyAsync(() -> scanMdxFiles(selectedDirectory, query), scanExecutor)
+                .supplyAsync(() -> scanMdxFiles(selectedDirectory, query, fs), scanExecutor)
                 .thenAccept(files -> Platform.runLater(() -> applyThumbnailResult(requestId, files)))
                 .exceptionally(error -> {
                     Platform.runLater(() -> statusLabel.setText("Scan failed: " + error.getMessage()));
@@ -342,9 +427,9 @@ public class AssetBrowserPane extends BorderPane {
                 });
     }
 
-    private List<Path> scanMdxFiles(final Path selectedDirectory, final String query) {
+    private List<Path> scanMdxFiles(final Path selectedDirectory, final String query, final FilterState fs) {
         try (Stream<Path> stream = Files.walk(selectedDirectory)) {
-            return stream
+            final List<Path> candidates = stream
                     .filter(Files::isRegularFile)
                     .filter(this::isMdxFile)
                     .filter(path -> query.isEmpty() || path.getFileName().toString().toLowerCase(Locale.ROOT).contains(query))
@@ -352,14 +437,96 @@ public class AssetBrowserPane extends BorderPane {
                             .comparing((Path p) -> p.getFileName().toString().toLowerCase(Locale.ROOT))
                             .thenComparing(Path::toString))
                     .toList();
+
+            if (!fs.active()) return candidates;
+
+            // Index any uncached files synchronously on this background thread
+            final int total = candidates.size();
+            final AtomicInteger indexed = new AtomicInteger(0);
+            for (final Path path : candidates) {
+                if (!modelIndex.containsKey(path)) {
+                    modelIndex.put(path, buildMetadata(path));
+                }
+                final int i = indexed.incrementAndGet();
+                Platform.runLater(() -> statusLabel.setText("Indexing… " + i + "/" + total));
+            }
+
+            return candidates.stream()
+                    .filter(path -> passesAdvancedFilter(path, fs))
+                    .toList();
         } catch (IOException ignored) {
             return List.of();
         }
     }
 
+    private ModelMetadata buildMetadata(final Path path) {
+        try {
+            final MdlxModel m = previewFactory.loadModel(path);
+            final long fileSize = Files.size(path);
+            final int polyCount = m.geosets.stream()
+                    .mapToInt(g -> g.faces != null ? g.faces.length / 3 : 0).sum();
+            final List<String> animNames = m.sequences.stream()
+                    .map(s -> s.name.toLowerCase(Locale.ROOT))
+                    .toList();
+            final List<String> texPaths = m.textures.stream()
+                    .filter(t -> t.path != null && !t.path.isBlank())
+                    .map(t -> t.path.toLowerCase(Locale.ROOT))
+                    .toList();
+            return new ModelMetadata(fileSize, polyCount, animNames, texPaths);
+        } catch (Exception ignored) {
+            return new ModelMetadata(0, 0, List.of(), List.of());
+        }
+    }
+
+    private FilterState captureFilterState() {
+        if (filterPanel == null || !filterPanel.isVisible()) {
+            return new FilterState(false, "", "", 0, Integer.MAX_VALUE, 0, Long.MAX_VALUE);
+        }
+        final String animQ  = animField.getText()  == null ? "" : animField.getText().trim().toLowerCase(Locale.ROOT);
+        final String texQ   = texField.getText()   == null ? "" : texField.getText().trim().toLowerCase(Locale.ROOT);
+        final int polyMin   = parseOrDefault(polyMinField.getText(), 0);
+        final int polyMax   = parseOrDefault(polyMaxField.getText(), Integer.MAX_VALUE);
+        final int sizeMinKb = parseOrDefault(sizeMinKbField.getText(), 0);
+        final int sizeMaxKb = parseOrDefault(sizeMaxKbField.getText(), Integer.MAX_VALUE / 1024);
+        final long sizeMin  = (long) sizeMinKb * 1024;
+        final long sizeMax  = sizeMaxKb >= Integer.MAX_VALUE / 1024 ? Long.MAX_VALUE : (long) sizeMaxKb * 1024;
+
+        final boolean active = !animQ.isEmpty() || !texQ.isEmpty()
+                || polyMin > 0 || polyMax < Integer.MAX_VALUE
+                || sizeMin > 0 || sizeMax < Long.MAX_VALUE;
+
+        return new FilterState(active, animQ, texQ, polyMin, polyMax, sizeMin, sizeMax);
+    }
+
+    private boolean passesAdvancedFilter(final Path path, final FilterState fs) {
+        final ModelMetadata meta = modelIndex.get(path);
+        if (meta == null) return false;
+        if (!fs.animQuery().isEmpty() && meta.animNames().stream().noneMatch(a -> a.contains(fs.animQuery()))) return false;
+        if (!fs.texQuery().isEmpty()  && meta.texPaths().stream().noneMatch(t -> t.contains(fs.texQuery()))) return false;
+        if (meta.polyCount() < fs.polyMin() || meta.polyCount() > fs.polyMax()) return false;
+        if (meta.fileSize()  < fs.sizeMinBytes() || meta.fileSize() > fs.sizeMaxBytes()) return false;
+        return true;
+    }
+
+    private void clearAdvancedFilters() {
+        animField.clear();
+        texField.clear();
+        polyMinField.clear();
+        polyMaxField.clear();
+        sizeMinKbField.clear();
+        sizeMaxKbField.clear();
+        searchDebounce.playFromStart();
+    }
+
     private boolean isMdxFile(final Path file) {
-        String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
-        return name.endsWith(".mdx");
+        final String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (!name.endsWith(".mdx")) return false;
+        final boolean isPortrait = name.contains("_portrait");
+        return switch (portraitFilter) {
+            case ALL             -> true;
+            case MODELS_ONLY     -> !isPortrait;
+            case PORTRAITS_ONLY  -> isPortrait;
+        };
     }
 
     private void applyThumbnailResult(final int requestId, final List<Path> files) {
@@ -411,6 +578,21 @@ public class AssetBrowserPane extends BorderPane {
         previewExecutor.shutdownNow();
     }
 
+    private static int parseOrDefault(final String text, final int defaultValue) {
+        if (text == null || text.isBlank()) return defaultValue;
+        try { return Integer.parseInt(text.trim()); }
+        catch (NumberFormatException ignored) { return defaultValue; }
+    }
+
+    private static TextField numericField(final String prompt) {
+        final TextField tf = new TextField();
+        tf.setPromptText(prompt);
+        tf.setPrefWidth(70);
+        tf.setTextFormatter(new TextFormatter<>(change ->
+                change.getText().matches("[0-9]*") ? change : null));
+        return tf;
+    }
+
     private static ThreadFactory namedThreadFactory(final String baseName) {
         AtomicInteger counter = new AtomicInteger();
         return runnable -> {
@@ -420,6 +602,16 @@ public class AssetBrowserPane extends BorderPane {
             return thread;
         };
     }
+
+    // -------------------------------------------------------------------------
+    // Inner types
+    // -------------------------------------------------------------------------
+
+    private record ModelMetadata(long fileSize, int polyCount,
+                                  List<String> animNames, List<String> texPaths) {}
+
+    private record FilterState(boolean active, String animQuery, String texQuery,
+                                int polyMin, int polyMax, long sizeMinBytes, long sizeMaxBytes) {}
 
     private static final class DirectoryTreeItem extends TreeItem<Path> {
         private boolean childrenLoaded;
