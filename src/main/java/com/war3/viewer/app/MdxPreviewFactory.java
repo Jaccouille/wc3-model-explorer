@@ -271,6 +271,59 @@ public final class MdxPreviewFactory {
         return sb.toString();
     }
 
+    /** Structured list of texture entries for the diagnostic list view. */
+    public List<TextureDiagEntry> buildTextureDiagList(
+            final MdlxModel model, final Path mdxFile, final Path rootDirectory) {
+        final List<TextureDiagEntry> entries = new ArrayList<>();
+        for (int ti = 0; ti < model.textures.size(); ti++) {
+            final MdlxTexture tex = model.textures.get(ti);
+            if (tex.replaceableId != 0) {
+                entries.add(new TextureDiagEntry(ti, "", tex.replaceableId, null,
+                        TextureDiagEntry.Source.REPLACEABLE));
+                continue;
+            }
+            final String p = tex.path == null ? "" : tex.path.trim();
+            if (p.isEmpty()) {
+                entries.add(new TextureDiagEntry(ti, "(empty)", 0, null, TextureDiagEntry.Source.MISSING));
+                continue;
+            }
+            final Optional<Path> disk = resolveTexturePath(p, mdxFile, rootDirectory);
+            if (disk.isPresent()) {
+                entries.add(new TextureDiagEntry(ti, p, 0, disk.get().toString(), TextureDiagEntry.Source.DISK));
+                continue;
+            }
+            boolean cascFound = false;
+            final GameDataSource gds = GameDataSource.get();
+            if (!gds.isEmpty()) {
+                for (final String c : textureVariants(p.replace('/', '\\'))) {
+                    if (gds.has(c)) {
+                        entries.add(new TextureDiagEntry(ti, p, 0, c, TextureDiagEntry.Source.CASC));
+                        cascFound = true;
+                        break;
+                    }
+                }
+            }
+            if (!cascFound) {
+                entries.add(new TextureDiagEntry(ti, p, 0, null, TextureDiagEntry.Source.MISSING));
+            }
+        }
+        return entries;
+    }
+
+    /**
+     * Loads the JavaFX {@link Image} for a texture path using the same disk→CASC→fallback
+     * resolution used during material building.
+     */
+    public Image loadTextureImage(final String path, final Path mdxFile, final Path rootDirectory) {
+        if (path == null || path.isBlank()) return fallbackTexture;
+        final Optional<Path> disk = resolveTexturePath(path, mdxFile, rootDirectory);
+        if (disk.isPresent()) {
+            return textureCache.computeIfAbsent(
+                    disk.get().toAbsolutePath().normalize(), this::loadTextureFromDisk);
+        }
+        return loadFromGameData(path);
+    }
+
     // -------------------------------------------------------------------------
     // Internal model building
     // -------------------------------------------------------------------------
@@ -839,6 +892,32 @@ public final class MdxPreviewFactory {
     // -------------------------------------------------------------------------
     // Inner classes
     // -------------------------------------------------------------------------
+
+    /** Describes one texture slot in a model for the diagnostic list view. */
+    public record TextureDiagEntry(
+            int index,
+            String modelPath,
+            int replaceableId,
+            String resolvedPath,
+            Source source
+    ) {
+        public enum Source { REPLACEABLE, DISK, CASC, MISSING }
+
+        /** Filename only, or "Replaceable #N". */
+        public String displayName() {
+            if (replaceableId != 0) return "Replaceable #" + replaceableId;
+            if (modelPath == null || modelPath.isBlank()) return "(empty path)";
+            final int slash = Math.max(modelPath.lastIndexOf('/'), modelPath.lastIndexOf('\\'));
+            return slash >= 0 ? modelPath.substring(slash + 1) : modelPath;
+        }
+
+        /** Uppercase file extension, e.g. "BLP", "TGA". */
+        public String extension() {
+            final String name = displayName().toLowerCase(Locale.ROOT);
+            final int dot = name.lastIndexOf('.');
+            return dot >= 0 ? name.substring(dot + 1).toUpperCase(Locale.ROOT) : "?";
+        }
+    }
 
     public static final class BoundsAccumulator {
         public double minX, minY, minZ, maxX, maxY, maxZ;

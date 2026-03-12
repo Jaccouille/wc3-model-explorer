@@ -2,6 +2,9 @@ package com.war3.viewer.app.viewer;
 
 import com.hiveworkshop.rms.parsers.mdlx.InterpolationType;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxAnimatedObject;
+import com.hiveworkshop.rms.parsers.mdlx.MdlxAttachment;
+import com.hiveworkshop.rms.parsers.mdlx.MdlxBone;
+import com.hiveworkshop.rms.parsers.mdlx.MdlxCollisionShape;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxCamera;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxGeoset;
 import com.hiveworkshop.rms.parsers.mdlx.MdlxGeosetAnimation;
@@ -17,8 +20,14 @@ import javafx.animation.AnimationTimer;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
+import javafx.geometry.Point2D;
+import javafx.geometry.Point3D;
 import javafx.geometry.Pos;
 import javafx.scene.AmbientLight;
+import javafx.scene.DepthTest;
+import javafx.scene.Node;
+import javafx.scene.canvas.Canvas;
+import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.Group;
 import javafx.scene.PerspectiveCamera;
 import javafx.scene.PointLight;
@@ -32,14 +41,22 @@ import javafx.scene.control.ToggleButton;
 import javafx.scene.control.ToggleGroup;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
+import javafx.scene.control.ListView;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.Slider;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.Tooltip;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.shape.Box;
+import javafx.scene.shape.Cylinder;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.ColumnConstraints;
+import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
@@ -47,10 +64,15 @@ import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.PhongMaterial;
 import javafx.scene.shape.CullFace;
+import javafx.scene.shape.DrawMode;
 import javafx.scene.shape.MeshView;
 import javafx.scene.shape.Rectangle;
+import javafx.scene.shape.Sphere;
 import javafx.scene.shape.TriangleMesh;
+import javafx.scene.text.Font;
 import javafx.scene.transform.Rotate;
+import javafx.scene.transform.Transform;
+import javafx.scene.input.MouseButton;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
 import javafx.stage.Window;
@@ -69,10 +91,12 @@ public final class ModelDetailDialog extends Stage {
     private static final double VIEW_H = 480;
     private static final double DIAG_W = 400;
 
-    private enum ShadingMode { SOLID, TEXTURE, LIT }
+    private enum ShadingMode { SOLID, TEXTURE, LIT, WIREFRAME }
     private ShadingMode shadingMode = ShadingMode.TEXTURE;
 
-    private TextArea diagArea;
+    private ListView<MdxPreviewFactory.TextureDiagEntry> diagList;
+    private TextArea  geosetsArea;
+    private GridPane  infoGrid;
 
     // Held for material refresh when team color changes
     private MdlxModel       loadedModel;
@@ -82,15 +106,17 @@ public final class ModelDetailDialog extends Stage {
     private List<MdlxGeoset> renderedGeosets = new ArrayList<>();
     private int             teamColorIndex = 0;
 
-    // Orbit state
+    // Orbit / pan state
     private double lastMouseX, lastMouseY;
     private double orbitAzimuth   = 38;
     private double orbitElevation = -18;
     private double cameraDistance = 380;
+    private double panX = 0, panY = 0;
 
     // Animation state
     private BoneAnimator boneAnimator;
     private List<MeshView> meshViews;
+    private List<MeshView> edgeMeshViews;
     private List<float[]> bindPoseVertices; // per-geoset bind-pose XYZ in JavaFX space
     private List<MdlxGeoset> geosets;
     /** Maps model.geosets index → meshViews index, for geoset animation lookup. */
@@ -101,9 +127,31 @@ public final class ModelDetailDialog extends Stage {
     private boolean playing = false;
     private long    lastNanos = -1;
     private double  animSpeed = 1.0;
+    private CheckBox loopCheckBox;
+    private Button   playBtn;
+    private CheckBox bonesCheckBox;
+    private CheckBox attachmentsCheckBox;
+    private CheckBox labelCheckBox;
+    private Canvas   labelCanvas;
+    private double   overlayNodeSize = 5.0;
+    private final List<Node>     boneLabelNodes      = new ArrayList<>();
+    private final List<String>   boneLabelNames      = new ArrayList<>();
+    private final List<Integer>  boneLabelObjectIds  = new ArrayList<>();
+    private final List<Cylinder> boneLabelCylinders  = new ArrayList<>(); // null = no parent
+    private final List<Integer>  boneLabelParentIds  = new ArrayList<>();
+    private final List<Node>     attachLabelNodes    = new ArrayList<>();
+    private final List<String>   attachLabelNames    = new ArrayList<>();
+    private final List<Integer>  attachLabelObjectIds = new ArrayList<>();
+    private final List<Cylinder> attachLabelCylinders = new ArrayList<>();
+    private final List<Integer>  attachLabelParentIds = new ArrayList<>();
 
     // Scene extras
     private Group gridGroup;
+    private Group overlayGroup;
+    private Group extentGroup;
+    private Group collisionGroup;
+    private Group boneGroup;
+    private Group attachmentGroup;
 
     // Bounds / normalization (set in setupModel, used by camera view)
     private MdxPreviewFactory.BoundsInfo modelBounds;
@@ -144,7 +192,7 @@ public final class ModelDetailDialog extends Stage {
         final Label seqLabel = new Label("Animation:");
         final ComboBox<String> seqCombo = new ComboBox<>();
         HBox.setHgrow(seqCombo, Priority.ALWAYS);
-        final Button playBtn = new Button("▶ Play");
+        playBtn = new Button("▶ Play");
         final Slider frameSlider = new Slider();
         HBox.setHgrow(frameSlider, Priority.ALWAYS);
         final Label frameLabel = new Label("Frame: 0");
@@ -195,6 +243,38 @@ public final class ModelDetailDialog extends Stage {
             if (gridGroup != null) gridGroup.setVisible(gridCheckBox.isSelected());
         });
 
+        // Loop toggle
+        loopCheckBox = new CheckBox("Loop");
+        loopCheckBox.setSelected(true);
+
+        // Visualizer toggles
+        bonesCheckBox       = new CheckBox("Bones");
+        attachmentsCheckBox = new CheckBox("Attachments");
+        labelCheckBox       = new CheckBox("Names");
+        bonesCheckBox.setOnAction(e -> {
+            if (boneGroup != null) boneGroup.setVisible(bonesCheckBox.isSelected());
+            redrawLabels();
+        });
+        attachmentsCheckBox.setOnAction(e -> {
+            if (attachmentGroup != null) attachmentGroup.setVisible(attachmentsCheckBox.isSelected());
+            redrawLabels();
+        });
+        labelCheckBox.setOnAction(e -> redrawLabels());
+
+        final HBox visualizerRow = new HBox(10, bonesCheckBox, attachmentsCheckBox, labelCheckBox);
+        visualizerRow.setAlignment(Pos.CENTER_LEFT);
+
+        // Overlay node size
+        final Label sizeLabel = new Label("Node size:");
+        final Slider sizeSlider = new Slider(1.0, 15.0, overlayNodeSize);
+        sizeSlider.setPrefWidth(120);
+        sizeSlider.valueProperty().addListener((obs, o, n) -> {
+            overlayNodeSize = n.doubleValue();
+            rebuildBoneAttachOverlays();
+        });
+        final HBox sizeRow = new HBox(8, sizeLabel, sizeSlider);
+        sizeRow.setAlignment(Pos.CENTER_LEFT);
+
         // Camera view
         final CheckBox cameraCheckBox = new CheckBox("Camera View");
         cameraCheckBox.setDisable(true);
@@ -208,24 +288,106 @@ public final class ModelDetailDialog extends Stage {
         final HBox speedRow = new HBox(8, speedLabel, speedSlider, speedValueLabel);
         speedRow.setAlignment(Pos.CENTER_LEFT);
 
-        final VBox animControls = new VBox(10, seqRow, playRow, tcRow, speedRow, gridCheckBox, cameraCheckBox);
+        final VBox animControls = new VBox(10, seqRow, playRow, tcRow, speedRow, gridCheckBox, loopCheckBox, visualizerRow, sizeRow, cameraCheckBox);
         animControls.setPadding(new Insets(12));
 
-        // Diagnostic panel
-        diagArea = new TextArea("Loading…");
-        diagArea.setEditable(false);
-        diagArea.setWrapText(false);
-        diagArea.getStyleClass().add("diag-area");
-        VBox.setVgrow(diagArea, Priority.ALWAYS);
+        // Diagnostic panel — texture list
+        diagList = new ListView<>();
+        diagList.setCellFactory(lv -> new ListCell<>() {
+            private final Rectangle dot      = new Rectangle(8, 8);
+            private final Label     idxLabel = new Label();
+            private final Label     nameLabel = new Label();
+            private final Label     srcBadge = new Label();
+            private final HBox      cell;
+            {
+                dot.setArcWidth(8); dot.setArcHeight(8);
+                idxLabel.setStyle("-fx-text-fill: -color-fg-muted; -fx-font-size: 11px;");
+                idxLabel.setMinWidth(30);
+                nameLabel.setMaxWidth(Double.MAX_VALUE);
+                HBox.setHgrow(nameLabel, Priority.ALWAYS);
+                srcBadge.setMinWidth(62); srcBadge.setAlignment(Pos.CENTER);
+                cell = new HBox(6, dot, idxLabel, nameLabel, srcBadge);
+                cell.setAlignment(Pos.CENTER_LEFT);
+                cell.setPadding(new Insets(2, 4, 2, 4));
+            }
+            @Override
+            protected void updateItem(final MdxPreviewFactory.TextureDiagEntry item, final boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) { setGraphic(null); return; }
+                idxLabel.setText("[" + item.index() + "]");
+                nameLabel.setText(item.displayName());
+                if (item.modelPath() != null && !item.modelPath().isBlank())
+                    Tooltip.install(nameLabel, new Tooltip(item.modelPath()));
+                final String base = "-fx-font-size: 10px; -fx-padding: 1 5 1 5; -fx-background-radius: 3;";
+                switch (item.source()) {
+                    case DISK -> {
+                        dot.setFill(Color.web("#4caf50"));
+                        srcBadge.setText("DISK");
+                        srcBadge.setStyle(base + "-fx-background-color:#1b5e20;-fx-text-fill:#a5d6a7;");
+                    }
+                    case CASC -> {
+                        dot.setFill(Color.web("#42a5f5"));
+                        srcBadge.setText("CASC");
+                        srcBadge.setStyle(base + "-fx-background-color:#0d47a1;-fx-text-fill:#90caf9;");
+                    }
+                    case MISSING -> {
+                        dot.setFill(Color.web("#ef5350"));
+                        srcBadge.setText("MISSING");
+                        srcBadge.setStyle(base + "-fx-background-color:#b71c1c;-fx-text-fill:#ef9a9a;");
+                    }
+                    case REPLACEABLE -> {
+                        dot.setFill(Color.web("#ffd54f"));
+                        srcBadge.setText("REPL");
+                        srcBadge.setStyle(base + "-fx-background-color:#e65100;-fx-text-fill:#ffe0b2;");
+                    }
+                }
+                setGraphic(cell);
+            }
+        });
+        diagList.setOnMouseClicked(e -> {
+            if (e.getClickCount() == 2 && e.getButton() == MouseButton.PRIMARY) {
+                final MdxPreviewFactory.TextureDiagEntry sel = diagList.getSelectionModel().getSelectedItem();
+                if (sel != null && sel.source() != MdxPreviewFactory.TextureDiagEntry.Source.REPLACEABLE)
+                    showTexturePopup(sel);
+            }
+        });
+        VBox.setVgrow(diagList, Priority.ALWAYS);
 
-        final VBox diagPane = new VBox(diagArea);
+        final Label texHeader  = new Label("Textures");
+        texHeader.setStyle("-fx-font-weight:bold; -fx-padding: 6 8 2 8;");
+        final Label geoHeader  = new Label("Geosets");
+        geoHeader.setStyle("-fx-font-weight:bold; -fx-padding: 4 8 2 8;");
+        geosetsArea = new TextArea();
+        geosetsArea.setEditable(false);
+        geosetsArea.setWrapText(false);
+        geosetsArea.setPrefHeight(130);
+        geosetsArea.setMaxHeight(200);
+        geosetsArea.getStyleClass().add("diag-area");
 
-        // Right panel: two tabs
+        final VBox diagPane = new VBox(texHeader, diagList, geoHeader, geosetsArea);
+
+        // Info tab (populated in setupModel)
+        infoGrid = new GridPane();
+        infoGrid.setHgap(10);
+        infoGrid.setVgap(6);
+        infoGrid.setPadding(new Insets(12));
+        final ColumnConstraints keyCol = new ColumnConstraints();
+        keyCol.setMinWidth(110); keyCol.setPrefWidth(120); keyCol.setMaxWidth(140);
+        final ColumnConstraints valCol = new ColumnConstraints();
+        valCol.setHgrow(Priority.ALWAYS); valCol.setMinWidth(0); valCol.setFillWidth(true);
+        infoGrid.getColumnConstraints().addAll(keyCol, valCol);
+        final ScrollPane infoScroll = new ScrollPane(infoGrid);
+        infoScroll.setFitToWidth(true);
+        infoScroll.setFitToHeight(true);
+
+        // Right panel: three tabs
         final Tab diagTab = new Tab("Texture Diagnostics", diagPane);
         diagTab.setClosable(false);
         final Tab animTab = new Tab("Animation", animControls);
         animTab.setClosable(false);
-        final TabPane rightTabPane = new TabPane(animTab, diagTab);
+        final Tab infoTab = new Tab("Info", infoScroll);
+        infoTab.setClosable(false);
+        final TabPane rightTabPane = new TabPane(animTab, infoTab, diagTab);
 
         // Horizontal split: 3-D view | right tab pane
         final SplitPane splitPane = new SplitPane(viewStack, rightTabPane);
@@ -282,6 +444,7 @@ public final class ModelDetailDialog extends Stage {
         this.boneAnimator = new BoneAnimator(model);
         this.geosets       = new ArrayList<>(model.geosets);
         this.meshViews     = new ArrayList<>();
+        this.edgeMeshViews = new ArrayList<>();
         this.bindPoseVertices = new ArrayList<>();
         this.renderedGeosets  = new ArrayList<>();
         this.resolvedMaterials.clear();
@@ -318,6 +481,13 @@ public final class ModelDetailDialog extends Stage {
             meshViews.add(mv);
             renderedGeosets.add(geoset);
 
+            // Edge overlay — shares the same TriangleMesh so animation is free
+            final MeshView edgeMv = new MeshView(mesh);
+            edgeMv.setCullFace(CullFace.NONE);
+            edgeMv.setDrawMode(DrawMode.LINE);
+            edgeMv.setVisible(false); // hidden except in SOLID mode
+            edgeMeshViews.add(edgeMv);
+
             if (previewFactory.isOpaqueGeoset(geoset, model)) opaqueMeshViews.add(mv);
             else                                               transparentMeshViews.add(mv);
         }
@@ -343,17 +513,32 @@ public final class ModelDetailDialog extends Stage {
         final Group rawGroup = new Group();
         rawGroup.getChildren().addAll(opaqueMeshViews);
         rawGroup.getChildren().addAll(transparentMeshViews);
+        rawGroup.getChildren().addAll(edgeMeshViews);
 
         if (rawGroup.getChildren().isEmpty()) {
             viewStack.getChildren().setAll(new Label("No renderable geometry found."));
             return;
         }
 
+        // Build overlay groups in a SEPARATE group so toggling visibility never affects rawGroup's
+        // layoutBounds and thus never shifts the normalization pivot of the mesh.
+        boneLabelNodes.clear();   boneLabelNames.clear();
+        attachLabelNodes.clear(); attachLabelNames.clear();
+        extentGroup     = buildExtentOverlay(model);
+        collisionGroup  = buildCollisionOverlay(model);
+        boneGroup       = buildBoneOverlay(model);
+        attachmentGroup = buildAttachmentOverlay(model);
+        for (final Group og : new Group[]{extentGroup, collisionGroup, boneGroup, attachmentGroup}) {
+            og.setVisible(false);
+        }
+        overlayGroup = new Group(extentGroup, collisionGroup, boneGroup, attachmentGroup);
+
         previewFactory.normalizeGroup(rawGroup, bounds);
+        previewFactory.normalizeGroup(overlayGroup, bounds); // same transform as rawGroup
 
         gridGroup = buildGrid(gridY);
         gridGroup.setVisible(false);
-        modelGroup.getChildren().setAll(rawGroup, gridGroup);
+        modelGroup.getChildren().setAll(rawGroup, overlayGroup, gridGroup);
         modelGroup.getTransforms().setAll(elevationRotate, azimuthRotate);
 
         // WC3 SD models are pre-lit: the reference shader (simpleDiffuse.frag) has all
@@ -409,24 +594,60 @@ public final class ModelDetailDialog extends Stage {
         StackPane.setAlignment(statsLabel, Pos.TOP_LEFT);
         viewStack.getChildren().add(statsLabel);
 
+        // Label canvas — transparent 2D overlay for bone/attachment name labels
+        labelCanvas = new Canvas(viewStack.getWidth() > 0 ? viewStack.getWidth() : VIEW_W,
+                                  viewStack.getHeight() > 0 ? viewStack.getHeight() : VIEW_H);
+        labelCanvas.setMouseTransparent(true);
+        viewStack.widthProperty().addListener((obs, o, n)  -> labelCanvas.setWidth(n.doubleValue()));
+        viewStack.heightProperty().addListener((obs, o, n) -> labelCanvas.setHeight(n.doubleValue()));
+        viewStack.getChildren().add(labelCanvas);
+
         // Shading mode toggle (Blender-style, top-right overlay)
         final ToggleGroup shadingGroup = new ToggleGroup();
-        final ToggleButton solidBtn   = new ToggleButton("Solid");
-        final ToggleButton textureBtn = new ToggleButton("Texture");
-        final ToggleButton litBtn     = new ToggleButton("Lit");
+        final ToggleButton solidBtn     = new ToggleButton("Solid");
+        final ToggleButton textureBtn   = new ToggleButton("Texture");
+        final ToggleButton litBtn       = new ToggleButton("Lit");
+        final ToggleButton wireframeBtn = new ToggleButton("Wireframe");
         solidBtn.setToggleGroup(shadingGroup);
         textureBtn.setToggleGroup(shadingGroup);
         litBtn.setToggleGroup(shadingGroup);
+        wireframeBtn.setToggleGroup(shadingGroup);
         textureBtn.setSelected(true);
-        solidBtn.setOnAction(e   -> applyShadingMode(ShadingMode.SOLID));
-        textureBtn.setOnAction(e -> applyShadingMode(ShadingMode.TEXTURE));
-        litBtn.setOnAction(e     -> applyShadingMode(ShadingMode.LIT));
-        final HBox shadingBar = new HBox(1, solidBtn, textureBtn, litBtn);
-        shadingBar.setPadding(new Insets(6));
-        shadingBar.setMaxWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
-        shadingBar.setMaxHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
-        StackPane.setAlignment(shadingBar, Pos.TOP_RIGHT);
-        viewStack.getChildren().add(shadingBar);
+        solidBtn.setOnAction(e     -> applyShadingMode(ShadingMode.SOLID));
+        textureBtn.setOnAction(e   -> applyShadingMode(ShadingMode.TEXTURE));
+        litBtn.setOnAction(e       -> applyShadingMode(ShadingMode.LIT));
+        wireframeBtn.setOnAction(e -> applyShadingMode(ShadingMode.WIREFRAME));
+        final HBox shadingBar = new HBox(1, wireframeBtn, solidBtn, textureBtn, litBtn);
+        shadingBar.setPadding(new Insets(6, 6, 2, 6));
+
+        // Overlay controls row (extents + collision)
+        final ComboBox<String> extentCombo = new ComboBox<>();
+        extentCombo.getItems().addAll("None", "Box", "Sphere", "Both");
+        extentCombo.getSelectionModel().selectFirst();
+        extentCombo.setStyle("-fx-font-size: 10px;");
+        extentCombo.setPrefWidth(90);
+        final CheckBox collisionCheckBox = new CheckBox("Collision");
+        collisionCheckBox.setStyle("-fx-font-size: 10px;");
+        final HBox overlayBar = new HBox(6, extentCombo, collisionCheckBox);
+        overlayBar.setAlignment(Pos.CENTER_LEFT);
+        overlayBar.setPadding(new Insets(0, 6, 4, 6));
+
+        final VBox topRightPanel = new VBox(0, shadingBar, overlayBar);
+        topRightPanel.setMaxWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+        topRightPanel.setMaxHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        StackPane.setAlignment(topRightPanel, Pos.TOP_RIGHT);
+        viewStack.getChildren().add(topRightPanel);
+
+        extentCombo.setOnAction(e -> {
+            if (extentGroup == null || extentGroup.getChildren().size() < 2) return;
+            final String val = extentCombo.getValue();
+            extentGroup.getChildren().get(0).setVisible("Box".equals(val)    || "Both".equals(val));
+            extentGroup.getChildren().get(1).setVisible("Sphere".equals(val) || "Both".equals(val));
+            extentGroup.setVisible(!"None".equals(val));
+        });
+        collisionCheckBox.setOnAction(e -> {
+            if (collisionGroup != null) collisionGroup.setVisible(collisionCheckBox.isSelected());
+        });
 
         setupOrbit(subScene);
 
@@ -436,7 +657,7 @@ public final class ModelDetailDialog extends Stage {
         for (final MdlxSequence seq : model.sequences) {
             final long bytes = estimateSequenceBytes(model, seq.interval[0], seq.interval[1]);
             final String base = seq.name.isEmpty() ? "(unnamed)" : seq.name;
-            seqNames.add(base + "  " + formatBytes(bytes));
+            seqNames.add(base + "  " + formatDuration(seq) + formatBytes(bytes));
         }
         seqCombo.setItems(FXCollections.observableList(seqNames));
 
@@ -503,11 +724,56 @@ public final class ModelDetailDialog extends Stage {
                 } else {
                     restoreOrbitCamera();
                 }
+                updateMeshes();
             });
         }
 
-        // Populate diagnostic panel
-        diagArea.setText(previewFactory.buildTextureDiagnostics(model, mdxFile, rootDirectory));
+        // Populate Info tab
+        final int totalGeoVerts = renderedGeosets.stream().mapToInt(g -> g.vertices.length / 3).sum();
+        final int totalGeoTris  = renderedGeosets.stream().mapToInt(g -> g.faces.length  / 3).sum();
+        final long fileSizeBytes;
+        try { fileSizeBytes = java.nio.file.Files.size(mdxFile); } catch (final Exception ex) { /* skip */
+            populateDiagnostics(model, mdxFile, rootDirectory, previewFactory);
+            return;
+        }
+        final String formatStr = model.version >= 900 ? "v" + model.version + " (HD/Reforged)"
+                                                      : "v" + model.version + " (Classic SD)";
+        final String[][] infoRows = {
+            { "File",           mdxFile.getFileName().toString() },
+            { "Path",           mdxFile.toString() },
+            { "Size",           formatFileSize(fileSizeBytes) },
+            { "Format",         formatStr },
+            { "Geosets",        String.valueOf(renderedGeosets.size()) },
+            { "Vertices",       String.format("%,d", totalGeoVerts) },
+            { "Triangles",      String.format("%,d", totalGeoTris) },
+            { "Bones",          String.valueOf(model.bones.size()) },
+            { "Helpers",        String.valueOf(model.helpers.size()) },
+            { "Attachments",    String.valueOf(model.attachments.size()) },
+            { "Sequences",      String.valueOf(model.sequences.size()) },
+            { "Bounding radius",String.format("%.2f", model.extent != null ? model.extent.boundsRadius : 0.0) },
+            { "Blend time",     model.blendTime + " ms" },
+        };
+        infoGrid.getChildren().clear();
+        for (int r = 0; r < infoRows.length; r++) {
+            final Label key = new Label(infoRows[r][0]);
+            key.setStyle("-fx-font-weight: bold; -fx-text-fill: -color-fg-muted;");
+            final Label val = new Label(infoRows[r][1]);
+            final boolean isPath = "Path".equals(infoRows[r][0]);
+            if (isPath) {
+                val.setMaxWidth(Double.MAX_VALUE);
+                final Tooltip tt = new Tooltip(infoRows[r][1]);
+                tt.setWrapText(false);
+                Tooltip.install(val, tt);
+            } else {
+                val.setWrapText(true);
+            }
+            infoGrid.add(key, 0, r);
+            infoGrid.add(val, 1, r);
+        }
+
+        // Populate texture diagnostics + geoset summary
+        populateDiagnostics(model, mdxFile, rootDirectory, previewFactory);
+        redrawLabels();
     }
 
     private void selectSequence(final int idx, final MdlxModel model,
@@ -520,6 +786,8 @@ public final class ModelDetailDialog extends Stage {
         frameSlider.setMax(seqEnd);
         frameSlider.setValue(seqStart);
         frameLabel.setText("Frame: " + (int) seqStart);
+        // NONLOOPING flag (bit 0) means the animation should not loop
+        if (loopCheckBox != null) loopCheckBox.setSelected((seq.flags & 1) == 0);
         updateMeshes();
     }
 
@@ -536,10 +804,20 @@ public final class ModelDetailDialog extends Stage {
                 final double elapsed = (now - lastNanos) / 1_000_000.0; // ms
                 lastNanos = now;
                 currentFrame += elapsed * animSpeed;
-                if (currentFrame > seqEnd) currentFrame = seqStart;
+                if (currentFrame > seqEnd) {
+                    if (loopCheckBox == null || loopCheckBox.isSelected()) {
+                        currentFrame = seqStart;
+                    } else {
+                        currentFrame = seqEnd;
+                        stopAnimation();
+                        playBtn.setText("▶ Play");
+                        return;
+                    }
+                }
                 frameSlider.setValue(currentFrame);
                 frameLabel.setText("Frame: " + (int) currentFrame);
                 updateMeshes();
+                redrawLabels();
             }
         };
         animTimer.start();
@@ -553,20 +831,24 @@ public final class ModelDetailDialog extends Stage {
 
     private void updateMeshes() {
         if (boneAnimator == null) return;
+        if (boneAnimator.hasBillboardNodes()) {
+            boneAnimator.setInverseCameraRotation(computeInverseCameraRotationForModel());
+        }
         final long frame = (long) currentFrame;
 
         // Reset all mesh view opacities to fully visible before applying geoset animations
-        for (final MeshView mv : meshViews) {
-            mv.setOpacity(1.0);
-        }
+        for (final MeshView mv : meshViews) mv.setOpacity(1.0);
+        if (edgeMeshViews != null) for (final MeshView ev : edgeMeshViews) ev.setOpacity(1.0);
 
         // Apply geoset animation alpha (visibility)
         if (loadedModel != null && geosetIndexToMeshIndex != null) {
             for (final MdlxGeosetAnimation geosetAnim : loadedModel.geosetAnimations) {
                 final Integer mvIdx = geosetIndexToMeshIndex.get(geosetAnim.geosetId);
                 if (mvIdx == null) continue;
-                final double alpha = sampleGeosetAlpha(geosetAnim, frame);
+                final double alpha = sampleGeosetAlpha(geosetAnim, frame, seqStart, seqEnd);
                 meshViews.get(mvIdx).setOpacity(alpha);
+                if (edgeMeshViews != null && mvIdx < edgeMeshViews.size())
+                    edgeMeshViews.get(mvIdx).setOpacity(alpha);
             }
         }
 
@@ -585,21 +867,32 @@ public final class ModelDetailDialog extends Stage {
             ((TriangleMesh) mv.getMesh()).getPoints().setAll(jfxAnimated);
             bindIdx++;
         }
+        updateOverlayAnimations(frame);
     }
 
     private static final War3ID KGAO_ID = AnimationMap.KGAO.getWar3id();
 
-    private static double sampleGeosetAlpha(final MdlxGeosetAnimation geosetAnim, final long frame) {
+    private static double sampleGeosetAlpha(final MdlxGeosetAnimation geosetAnim,
+                                              final long frame, final long seqStart, final long seqEnd) {
         for (final MdlxTimeline<?> tl : geosetAnim.timelines) {
             if (tl.name.equals(KGAO_ID) && tl instanceof MdlxFloatTimeline fat) {
-                return sampleFloat1(fat, frame);
+                return sampleFloat1(fat, frame, seqStart, seqEnd);
             }
         }
         return geosetAnim.alpha;
     }
 
-    private static float sampleFloat1(final MdlxFloatTimeline tl, final long frame) {
+    private static float sampleFloat1(final MdlxFloatTimeline tl, final long frame,
+                                       final long seqStart, final long seqEnd) {
         if (tl.frames == null || tl.frames.length == 0) return 1f;
+
+        // If no keyframe falls within the current sequence interval, the geoset is visible
+        boolean hasKeyInSeq = false;
+        for (final long kf : tl.frames) {
+            if (kf >= seqStart && kf <= seqEnd) { hasKeyInSeq = true; break; }
+        }
+        if (!hasKeyInSeq) return 1f;
+
         if (frame <= tl.frames[0]) return tl.values[0][0];
         final int last = tl.frames.length - 1;
         if (frame >= tl.frames[last]) return tl.values[last][0];
@@ -631,6 +924,18 @@ public final class ModelDetailDialog extends Stage {
     private void applyShadingMode(final ShadingMode mode) {
         this.shadingMode = mode;
         if (meshViews == null || meshViews.isEmpty()) return;
+        // Restore fill draw mode; wireframe case overrides below
+        for (final MeshView mv : meshViews) mv.setDrawMode(DrawMode.FILL);
+        // Hide edge overlay by default; SOLID case re-shows it
+        final boolean showEdges = (mode == ShadingMode.SOLID);
+        if (edgeMeshViews != null) {
+            final PhongMaterial edgeMat = new PhongMaterial(Color.web("#202830"));
+            edgeMat.setSpecularColor(Color.TRANSPARENT);
+            for (final MeshView ev : edgeMeshViews) {
+                ev.setVisible(showEdges);
+                ev.setMaterial(edgeMat);
+            }
+        }
         switch (mode) {
             case SOLID -> {
                 if (ambientLight != null) ambientLight.setColor(Color.WHITE);
@@ -655,10 +960,21 @@ public final class ModelDetailDialog extends Stage {
                     meshViews.get(i).setMaterial(resolvedMaterials.get(i));
                 }
             }
+            case WIREFRAME -> {
+                if (ambientLight != null) ambientLight.setColor(Color.WHITE);
+                if (pointLight   != null) pointLight.setLightOn(false);
+                final PhongMaterial wireMat = new PhongMaterial(Color.web("#a8c8e8"));
+                wireMat.setSpecularColor(Color.TRANSPARENT);
+                for (final MeshView mv : meshViews) {
+                    mv.setMaterial(wireMat);
+                    mv.setDrawMode(DrawMode.LINE);
+                }
+            }
         }
     }
 
     private void applyBindPose() {
+        if (edgeMeshViews != null) for (final MeshView ev : edgeMeshViews) ev.setOpacity(1.0);
         int bindIdx = 0;
         for (final MeshView mv : meshViews) {
             mv.setOpacity(1.0);
@@ -667,6 +983,7 @@ public final class ModelDetailDialog extends Stage {
             }
             bindIdx++;
         }
+        resetOverlaysToBind();
     }
 
     // -------------------------------------------------------------------------
@@ -681,16 +998,110 @@ public final class ModelDetailDialog extends Stage {
             final double dy = e.getSceneY() - lastMouseY;
             lastMouseX = e.getSceneX();
             lastMouseY = e.getSceneY();
-            orbitAzimuth   = (orbitAzimuth + dx * 0.4) % 360;
-            orbitElevation = Math.max(-85, Math.min(85, orbitElevation + dy * 0.3));
-            azimuthRotate.setAngle(orbitAzimuth);
-            elevationRotate.setAngle(orbitElevation);
+            if (e.getButton() == MouseButton.MIDDLE || e.isShiftDown()) {
+                // Pan: translate camera in screen-space, speed proportional to zoom level
+                final double speed = cameraDistance * 0.0006;
+                panX += dx * speed;
+                panY += dy * speed;
+                camera.setTranslateX(panX);
+                camera.setTranslateY(panY);
+            } else {
+                orbitAzimuth   = (orbitAzimuth + dx * 0.4) % 360;
+                orbitElevation = Math.max(-85, Math.min(85, orbitElevation + dy * 0.3));
+                azimuthRotate.setAngle(orbitAzimuth);
+                elevationRotate.setAngle(orbitElevation);
+                if (boneAnimator != null && boneAnimator.hasBillboardNodes() && !playing) {
+                    updateMeshes();
+                }
+            }
+            redrawLabels();
         });
 
         subScene.setOnScroll(e -> {
             cameraDistance = Math.max(50, Math.min(1500, cameraDistance - e.getDeltaY() * 1.5));
             camera.setTranslateZ(-cameraDistance);
+            if (boneAnimator != null && boneAnimator.hasBillboardNodes() && !playing) {
+                updateMeshes();
+            }
+            redrawLabels();
         });
+
+        // Double-right-click resets orbit, pan and zoom
+        subScene.setOnMouseClicked(e -> {
+            if (e.getButton() == MouseButton.SECONDARY && e.getClickCount() == 2) resetCamera();
+        });
+    }
+
+    private void resetCamera() {
+        panX = 0; panY = 0;
+        orbitAzimuth = 38; orbitElevation = -18; cameraDistance = 380;
+        camera.setTranslateX(0); camera.setTranslateY(0); camera.setTranslateZ(-cameraDistance);
+        camera.setFieldOfView(35);
+        camera.getTransforms().clear();
+        azimuthRotate.setAngle(orbitAzimuth);
+        elevationRotate.setAngle(orbitElevation);
+        modelGroup.getTransforms().setAll(elevationRotate, azimuthRotate);
+        redrawLabels();
+    }
+
+    private float[] computeInverseCameraRotationForModel() {
+        if (camera == null) {
+            return new float[]{0f, 0f, 0f, 1f};
+        }
+
+        final float[] modelRot = quaternionFromRotates(modelGroup.getTransforms());
+        final float[] camRot = quaternionFromRotates(camera.getTransforms());
+        final float[] invModel = quatConjugate(modelRot);
+        final float[] invCam = quatConjugate(camRot);
+        return quatNormalize(quatMultiply(invModel, invCam));
+    }
+
+    private static float[] quaternionFromRotates(final List<Transform> transforms) {
+        float[] result = new float[]{0f, 0f, 0f, 1f};
+        for (final Transform transform : transforms) {
+            if (!(transform instanceof Rotate rotate)) {
+                continue;
+            }
+            final double ax = rotate.getAxis().getX();
+            final double ay = rotate.getAxis().getY();
+            final double az = rotate.getAxis().getZ();
+            final double axisLen = Math.sqrt((ax * ax) + (ay * ay) + (az * az));
+            if (axisLen < 1e-10) {
+                continue;
+            }
+            final double half = Math.toRadians(rotate.getAngle()) * 0.5;
+            final double sin = Math.sin(half) / axisLen;
+            final float[] q = new float[]{
+                    (float) (ax * sin),
+                    (float) (ay * sin),
+                    (float) (az * sin),
+                    (float) Math.cos(half)
+            };
+            result = quatNormalize(quatMultiply(result, q));
+        }
+        return result;
+    }
+
+    private static float[] quatMultiply(final float[] a, final float[] b) {
+        return new float[]{
+                a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+                a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+                a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+                a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]
+        };
+    }
+
+    private static float[] quatConjugate(final float[] q) {
+        return new float[]{-q[0], -q[1], -q[2], q[3]};
+    }
+
+    private static float[] quatNormalize(final float[] q) {
+        final float len = (float) Math.sqrt((q[0] * q[0]) + (q[1] * q[1]) + (q[2] * q[2]) + (q[3] * q[3]));
+        if (len < 1e-8f) {
+            return new float[]{0f, 0f, 0f, 1f};
+        }
+        final float inv = 1f / len;
+        return new float[]{q[0] * inv, q[1] * inv, q[2] * inv, q[3] * inv};
     }
 
     // -------------------------------------------------------------------------
@@ -699,31 +1110,83 @@ public final class ModelDetailDialog extends Stage {
 
     /** Build a flat ground grid centred at (0, gridY, 0) in modelGroup local space. */
     private static Group buildGrid(final double gridY) {
-        final int    HALF    = 200;
-        final int    SPACING = 40;
-        final double THICK   = 2.0;
-        final double HEIGHT  = 1.5;
+        final int halfExtent = 220;
+        final int mediumStep = 40;
+        final int weakStep = Math.max(1, mediumStep / 10);
+        final int strongStep = mediumStep * 10;
+        final double lineHeight = 0.6;
 
-        final PhongMaterial axisMat = new PhongMaterial(Color.web("#4a5060"));
-        axisMat.setSpecularColor(Color.TRANSPARENT);
-        final PhongMaterial gridMat = new PhongMaterial(Color.web("#252d3a"));
-        gridMat.setSpecularColor(Color.TRANSPARENT);
+        final PhongMaterial weakMat = mat(Color.rgb(80, 80, 80, 0.39));
+        final PhongMaterial mediumMat = mat(Color.rgb(80, 80, 80, 0.59));
+        final PhongMaterial strongMat = mat(Color.rgb(0, 0, 0, 1.0));
+        final PhongMaterial xAxisMat = mat(Color.rgb(200, 20, 20, 1.0));
+        final PhongMaterial yAxisMat = mat(Color.rgb(20, 200, 20, 1.0));
 
-        final Group g = new Group();
-        for (int i = -HALF; i <= HALF; i += SPACING) {
-            // Line running along X at Z = i
-            final Box lx = new Box(HALF * 2.0, HEIGHT, THICK);
-            lx.setTranslateZ(i);
-            lx.setTranslateY(gridY);
-            lx.setMaterial(i == 0 ? axisMat : gridMat);
-            // Line running along Z at X = i
-            final Box lz = new Box(THICK, HEIGHT, HALF * 2.0);
-            lz.setTranslateX(i);
-            lz.setTranslateY(gridY);
-            lz.setMaterial(i == 0 ? axisMat : gridMat);
-            g.getChildren().addAll(lx, lz);
+        final Group group = new Group();
+
+        addGridLayer(group, gridY, halfExtent, weakStep, 0.35, lineHeight, weakMat);
+        addGridLayer(group, gridY, halfExtent, mediumStep, 0.65, lineHeight, mediumMat);
+        addGridLayer(group, gridY, halfExtent, strongStep, 1.1, lineHeight, strongMat);
+
+        // Axis lines, matching ViewportView.drawGrid intent: X in red, Y in green.
+        group.getChildren().add(lineAlongX(halfExtent, 1.6, lineHeight, 0, gridY, xAxisMat));
+        group.getChildren().add(lineAlongZ(halfExtent, 1.6, lineHeight, 0, gridY, yAxisMat));
+
+        return group;
+    }
+
+    private static void addGridLayer(
+            final Group group,
+            final double gridY,
+            final int halfExtent,
+            final int spacing,
+            final double thickness,
+            final double height,
+            final PhongMaterial material
+    ) {
+        for (int i = -halfExtent; i <= halfExtent; i += spacing) {
+            if (i == 0) {
+                continue;
+            }
+            group.getChildren().add(lineAlongX(halfExtent, thickness, height, i, gridY, material));
+            group.getChildren().add(lineAlongZ(halfExtent, thickness, height, i, gridY, material));
         }
-        return g;
+    }
+
+    private static Box lineAlongX(
+            final int halfExtent,
+            final double thickness,
+            final double height,
+            final double z,
+            final double y,
+            final PhongMaterial material
+    ) {
+        final Box line = new Box(halfExtent * 2.0, height, thickness);
+        line.setTranslateY(y);
+        line.setTranslateZ(z);
+        line.setMaterial(material);
+        return line;
+    }
+
+    private static Box lineAlongZ(
+            final int halfExtent,
+            final double thickness,
+            final double height,
+            final double x,
+            final double y,
+            final PhongMaterial material
+    ) {
+        final Box line = new Box(thickness, height, halfExtent * 2.0);
+        line.setTranslateX(x);
+        line.setTranslateY(y);
+        line.setMaterial(material);
+        return line;
+    }
+
+    private static PhongMaterial mat(final Color color) {
+        final PhongMaterial material = new PhongMaterial(color);
+        material.setSpecularColor(Color.TRANSPARENT);
+        return material;
     }
 
     /** Convert WC3 model-space vertices (Y-up) to JavaFX space (Y-down, Z-depth). */
@@ -801,6 +1264,7 @@ public final class ModelDetailDialog extends Stage {
     }
 
     private void restoreOrbitCamera() {
+        panX = 0; panY = 0;
         camera.getTransforms().clear();
         camera.setTranslateX(0);
         camera.setTranslateY(0);
@@ -848,10 +1312,426 @@ public final class ModelDetailDialog extends Stage {
         return totalFrames > 0 ? (totalBytes - 16) / totalFrames * count : 0;
     }
 
+    private static String formatDuration(final MdlxSequence seq) {
+        final long ms = seq.interval[1] - seq.interval[0];
+        return String.format("%.1fs  ", ms / 1000.0);
+    }
+
+    private static String formatFileSize(final long bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
+        return String.format("%.2f MB", bytes / (1024.0 * 1024));
+    }
+
     private static String formatBytes(final long bytes) {
         if (bytes <= 0) return "";
         if (bytes < 1024) return "  [" + bytes + " B]";
         return String.format("  [%.1f KB]", bytes / 1024.0);
+    }
+
+    private static Group buildExtentOverlay(final MdlxModel model) {
+        final Group g = new Group();
+        if (model.extent == null) return g;
+        final float[] min = model.extent.min;
+        final float[] max = model.extent.max;
+        if (min == null || max == null || min.length < 3 || max.length < 3) return g;
+
+        // WC3→JavaFX: jfx_x=wc3_x, jfx_y=-wc3_z, jfx_z=wc3_y
+        final double cx = (min[0] + max[0]) / 2.0;
+        final double cy = -(min[2] + max[2]) / 2.0;
+        final double cz = (min[1] + max[1]) / 2.0;
+        final double sx = Math.max(0.5, max[0] - min[0]);
+        final double sy = Math.max(0.5, max[2] - min[2]);
+        final double sz = Math.max(0.5, max[1] - min[1]);
+
+        final Box box = new Box(sx, sy, sz);
+        box.setTranslateX(cx); box.setTranslateY(cy); box.setTranslateZ(cz);
+        box.setDrawMode(DrawMode.LINE);
+        box.setMaterial(mat(Color.rgb(0, 220, 80, 1.0)));
+
+        final Sphere sphere = new Sphere(Math.max(0.5, model.extent.boundsRadius));
+        sphere.setTranslateX(cx); sphere.setTranslateY(cy); sphere.setTranslateZ(cz);
+        sphere.setDrawMode(DrawMode.LINE);
+        sphere.setMaterial(mat(Color.rgb(0, 200, 255, 1.0)));
+
+        g.getChildren().addAll(box, sphere); // index 0=box, 1=sphere (used by extentCombo listener)
+        return g;
+    }
+
+    private static Group buildCollisionOverlay(final MdlxModel model) {
+        final Group g = new Group();
+        final PhongMaterial colMat = mat(Color.rgb(255, 140, 0, 1.0));
+        for (final MdlxCollisionShape shape : model.collisionShapes) {
+            if (shape.vertices == null || shape.vertices.length == 0) continue;
+            switch (shape.type) {
+                case BOX -> {
+                    if (shape.vertices.length < 2) continue;
+                    final float[] v0 = shape.vertices[0], v1 = shape.vertices[1];
+                    final double minX = Math.min(v0[0], v1[0]), maxX = Math.max(v0[0], v1[0]);
+                    final double minY = Math.min(-v0[2], -v1[2]), maxY = Math.max(-v0[2], -v1[2]);
+                    final double minZ = Math.min(v0[1], v1[1]), maxZ = Math.max(v0[1], v1[1]);
+                    final Box box = new Box(Math.max(0.5, maxX - minX), Math.max(0.5, maxY - minY), Math.max(0.5, maxZ - minZ));
+                    box.setTranslateX((minX + maxX) / 2); box.setTranslateY((minY + maxY) / 2); box.setTranslateZ((minZ + maxZ) / 2);
+                    box.setDrawMode(DrawMode.LINE); box.setMaterial(colMat);
+                    g.getChildren().add(box);
+                }
+                case SPHERE -> {
+                    final float[] v0 = shape.vertices[0];
+                    final Sphere sphere = new Sphere(Math.max(0.5, shape.boundsRadius));
+                    sphere.setTranslateX(v0[0]); sphere.setTranslateY(-v0[2]); sphere.setTranslateZ(v0[1]);
+                    sphere.setDrawMode(DrawMode.LINE); sphere.setMaterial(colMat);
+                    g.getChildren().add(sphere);
+                }
+                case CYLINDER -> {
+                    // Approximated as sphere at midpoint
+                    if (shape.vertices.length < 2) continue;
+                    final float[] v0 = shape.vertices[0], v1 = shape.vertices[1];
+                    final Sphere sphere = new Sphere(Math.max(0.5, shape.boundsRadius));
+                    sphere.setTranslateX((v0[0] + v1[0]) / 2.0);
+                    sphere.setTranslateY((-v0[2] - v1[2]) / 2.0);
+                    sphere.setTranslateZ((v0[1] + v1[1]) / 2.0);
+                    sphere.setDrawMode(DrawMode.LINE); sphere.setMaterial(colMat);
+                    g.getChildren().add(sphere);
+                }
+                default -> { /* skip PLANE */ }
+            }
+        }
+        return g;
+    }
+
+    private Group buildBoneOverlay(final MdlxModel model) {
+        final Group g = new Group();
+        g.setDepthTest(DepthTest.DISABLE);
+        final PhongMaterial boneMat = mat(Color.rgb(255, 220, 0, 1.0));
+        final double lineR = Math.max(0.2, overlayNodeSize * 0.12);
+        for (final MdlxBone bone : model.bones) {
+            final float[] pivot = pivotOf(bone.objectId, model);
+            if (pivot == null) continue;
+            final Box b = new Box(overlayNodeSize, overlayNodeSize, overlayNodeSize);
+            b.setTranslateX(pivot[0]); b.setTranslateY(-pivot[2]); b.setTranslateZ(pivot[1]);
+            b.setDrawMode(DrawMode.LINE); b.setMaterial(boneMat);
+            g.getChildren().add(b);
+            boneLabelNodes.add(b);
+            boneLabelNames.add(bone.name.isEmpty() ? "Bone" : bone.name);
+            boneLabelObjectIds.add(bone.objectId);
+            boneLabelParentIds.add(bone.parentId);
+            Cylinder line = null;
+            if (bone.parentId >= 0) {
+                final float[] pp = pivotOf(bone.parentId, model);
+                if (pp != null) {
+                    line = lineCylinder(pivot, pp, lineR, boneMat);
+                    if (line != null) g.getChildren().add(line);
+                }
+            }
+            boneLabelCylinders.add(line);
+        }
+        return g;
+    }
+
+    private Group buildAttachmentOverlay(final MdlxModel model) {
+        final Group g = new Group();
+        g.setDepthTest(DepthTest.DISABLE);
+        final PhongMaterial attMat = mat(Color.rgb(100, 200, 255, 1.0));
+        final double lineR = Math.max(0.2, overlayNodeSize * 0.12);
+        for (final MdlxAttachment att : model.attachments) {
+            final float[] pivot = pivotOf(att.objectId, model);
+            if (pivot == null) continue;
+            final Box b = new Box(overlayNodeSize, overlayNodeSize, overlayNodeSize);
+            b.setTranslateX(pivot[0]); b.setTranslateY(-pivot[2]); b.setTranslateZ(pivot[1]);
+            b.setDrawMode(DrawMode.LINE); b.setMaterial(attMat);
+            g.getChildren().add(b);
+            attachLabelNodes.add(b);
+            attachLabelNames.add(att.name.isEmpty() ? "Attach" : att.name);
+            attachLabelObjectIds.add(att.objectId);
+            attachLabelParentIds.add(att.parentId);
+            Cylinder line = null;
+            if (att.parentId >= 0) {
+                final float[] pp = pivotOf(att.parentId, model);
+                if (pp != null) {
+                    line = lineCylinder(pivot, pp, lineR, attMat);
+                    if (line != null) g.getChildren().add(line);
+                }
+            }
+            attachLabelCylinders.add(line);
+        }
+        return g;
+    }
+
+    private static float[] pivotOf(final int objectId, final MdlxModel model) {
+        if (objectId < 0 || objectId >= model.pivotPoints.size()) return null;
+        return model.pivotPoints.get(objectId);
+    }
+
+    /** Cylinder between two WC3-space pivot points, oriented along the direction vector. */
+    private static Cylinder lineCylinder(final float[] fromWc3, final float[] toWc3,
+                                          final double radius, final PhongMaterial mat) {
+        final double x1 = fromWc3[0], y1 = -fromWc3[2], z1 = fromWc3[1];
+        final double x2 = toWc3[0],   y2 = -toWc3[2],   z2 = toWc3[1];
+        final double dx = x2 - x1, dy = y2 - y1, dz = z2 - z1;
+        final double len = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (len < 0.5) return null;
+        final Cylinder cyl = new Cylinder(radius, len);
+        cyl.setMaterial(mat);
+        cyl.setTranslateX((x1 + x2) / 2);
+        cyl.setTranslateY((y1 + y2) / 2);
+        cyl.setTranslateZ((z1 + z2) / 2);
+        final Point3D yAxis = new Point3D(0, 1, 0);
+        final Point3D dir   = new Point3D(dx / len, dy / len, dz / len);
+        final Point3D axis  = yAxis.crossProduct(dir);
+        final double  angle = Math.toDegrees(Math.acos(Math.min(1.0, Math.max(-1.0, yAxis.dotProduct(dir)))));
+        if (axis.magnitude() > 1e-6) cyl.getTransforms().add(new Rotate(angle, axis));
+        return cyl;
+    }
+
+    private void rebuildBoneAttachOverlays() {
+        if (loadedModel == null || overlayGroup == null) return;
+        overlayGroup.getChildren().removeAll(boneGroup, attachmentGroup);
+        boneLabelNodes.clear();    boneLabelNames.clear();
+        boneLabelObjectIds.clear(); boneLabelCylinders.clear(); boneLabelParentIds.clear();
+        attachLabelNodes.clear();  attachLabelNames.clear();
+        attachLabelObjectIds.clear(); attachLabelCylinders.clear(); attachLabelParentIds.clear();
+        boneGroup       = buildBoneOverlay(loadedModel);
+        attachmentGroup = buildAttachmentOverlay(loadedModel);
+        boneGroup.setVisible(bonesCheckBox != null && bonesCheckBox.isSelected());
+        attachmentGroup.setVisible(attachmentsCheckBox != null && attachmentsCheckBox.isSelected());
+        overlayGroup.getChildren().addAll(boneGroup, attachmentGroup);
+        redrawLabels();
+    }
+
+    private void updateOverlayAnimations(final long frame) {
+        if (boneAnimator == null) return;
+        final Map<Integer, float[]> worldPos = boneAnimator.computeNodeWorldPositions(frame, seqStart, seqEnd);
+        for (int i = 0; i < boneLabelObjectIds.size() && i < boneLabelNodes.size(); i++) {
+            final float[] pos = worldPos.get(boneLabelObjectIds.get(i));
+            if (pos == null) continue;
+            final Node node = boneLabelNodes.get(i);
+            node.setTranslateX(pos[0]); node.setTranslateY(-pos[2]); node.setTranslateZ(pos[1]);
+            if (i < boneLabelCylinders.size() && i < boneLabelParentIds.size()) {
+                final Cylinder cyl = boneLabelCylinders.get(i);
+                final int parentId = boneLabelParentIds.get(i);
+                if (cyl != null && parentId >= 0) {
+                    final float[] pp = worldPos.get(parentId);
+                    if (pp != null) updateCylinder(cyl, pos, pp);
+                }
+            }
+        }
+        for (int i = 0; i < attachLabelObjectIds.size() && i < attachLabelNodes.size(); i++) {
+            final float[] pos = worldPos.get(attachLabelObjectIds.get(i));
+            if (pos == null) continue;
+            final Node node = attachLabelNodes.get(i);
+            node.setTranslateX(pos[0]); node.setTranslateY(-pos[2]); node.setTranslateZ(pos[1]);
+            if (i < attachLabelCylinders.size() && i < attachLabelParentIds.size()) {
+                final Cylinder cyl = attachLabelCylinders.get(i);
+                final int parentId = attachLabelParentIds.get(i);
+                if (cyl != null && parentId >= 0) {
+                    final float[] pp = worldPos.get(parentId);
+                    if (pp != null) updateCylinder(cyl, pos, pp);
+                }
+            }
+        }
+    }
+
+    private static void updateCylinder(final Cylinder cyl, final float[] fromWc3, final float[] toWc3) {
+        final double x1 = fromWc3[0], y1 = -fromWc3[2], z1 = fromWc3[1];
+        final double x2 = toWc3[0],   y2 = -toWc3[2],   z2 = toWc3[1];
+        final double dx = x2 - x1, dy = y2 - y1, dz = z2 - z1;
+        final double len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (len < 0.5) { cyl.setVisible(false); return; }
+        cyl.setVisible(true);
+        cyl.setHeight(len);
+        cyl.setTranslateX((x1 + x2) / 2);
+        cyl.setTranslateY((y1 + y2) / 2);
+        cyl.setTranslateZ((z1 + z2) / 2);
+        final Point3D yAxis = new Point3D(0, 1, 0);
+        final Point3D dir   = new Point3D(dx / len, dy / len, dz / len);
+        final Point3D axis  = yAxis.crossProduct(dir);
+        final double  angle = Math.toDegrees(Math.acos(Math.min(1.0, Math.max(-1.0, yAxis.dotProduct(dir)))));
+        cyl.getTransforms().clear();
+        if (axis.magnitude() > 1e-6) cyl.getTransforms().add(new Rotate(angle, axis));
+    }
+
+    private void resetOverlaysToBind() {
+        if (loadedModel == null) return;
+        for (int i = 0; i < boneLabelObjectIds.size() && i < boneLabelNodes.size(); i++) {
+            final float[] pivot = pivotOf(boneLabelObjectIds.get(i), loadedModel);
+            if (pivot == null) continue;
+            final Node node = boneLabelNodes.get(i);
+            node.setTranslateX(pivot[0]); node.setTranslateY(-pivot[2]); node.setTranslateZ(pivot[1]);
+            if (i < boneLabelCylinders.size() && i < boneLabelParentIds.size()) {
+                final Cylinder cyl = boneLabelCylinders.get(i);
+                final int parentId = boneLabelParentIds.get(i);
+                if (cyl != null && parentId >= 0) {
+                    final float[] pp = pivotOf(parentId, loadedModel);
+                    if (pp != null) { cyl.setVisible(true); updateCylinder(cyl, pivot, pp); }
+                }
+            }
+        }
+        for (int i = 0; i < attachLabelObjectIds.size() && i < attachLabelNodes.size(); i++) {
+            final float[] pivot = pivotOf(attachLabelObjectIds.get(i), loadedModel);
+            if (pivot == null) continue;
+            final Node node = attachLabelNodes.get(i);
+            node.setTranslateX(pivot[0]); node.setTranslateY(-pivot[2]); node.setTranslateZ(pivot[1]);
+            if (i < attachLabelCylinders.size() && i < attachLabelParentIds.size()) {
+                final Cylinder cyl = attachLabelCylinders.get(i);
+                final int parentId = attachLabelParentIds.get(i);
+                if (cyl != null && parentId >= 0) {
+                    final float[] pp = pivotOf(parentId, loadedModel);
+                    if (pp != null) { cyl.setVisible(true); updateCylinder(cyl, pivot, pp); }
+                }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Texture diagnostics helpers
+    // -------------------------------------------------------------------------
+
+    private void populateDiagnostics(final MdlxModel model, final Path mdxFile,
+                                      final Path rootDirectory, final MdxPreviewFactory factory) {
+        diagList.setItems(FXCollections.observableList(
+                factory.buildTextureDiagList(model, mdxFile, rootDirectory)));
+        geosetsArea.setText(buildGeosetText(model));
+    }
+
+    private void showTexturePopup(final MdxPreviewFactory.TextureDiagEntry entry) {
+        if (loadedPreviewFactory == null) return;
+        final Stage popup = new Stage();
+        popup.initOwner(this);
+        popup.initModality(javafx.stage.Modality.NONE);
+        popup.setTitle(entry.displayName());
+
+        final ImageView imgView = new ImageView();
+        imgView.setPreserveRatio(true);
+        imgView.setSmooth(true);
+        imgView.setFitWidth(512);
+        imgView.setFitHeight(512);
+
+        final ProgressIndicator spin = new ProgressIndicator();
+        spin.setPrefSize(56, 56);
+        final StackPane imgPane = new StackPane(spin);
+        imgPane.setPrefSize(280, 280);
+        imgPane.setStyle("-fx-background-color:#1a1e26;");
+
+        final GridPane infoGrid = new GridPane();
+        infoGrid.setHgap(10); infoGrid.setVgap(6);
+        infoGrid.setPadding(new Insets(10, 12, 12, 12));
+        final ColumnConstraints kc = new ColumnConstraints();
+        kc.setMinWidth(80);
+        final ColumnConstraints vc = new ColumnConstraints();
+        vc.setHgrow(Priority.ALWAYS); vc.setFillWidth(true);
+        infoGrid.getColumnConstraints().addAll(kc, vc);
+
+        final Label dimsLabel = addInfoRow(infoGrid, 0, "Dimensions", "loading…");
+        addInfoRow(infoGrid, 1, "Format", entry.extension());
+        addInfoRow(infoGrid, 2, "Source", entry.source().name());
+        final String pathText = entry.resolvedPath() != null ? entry.resolvedPath()
+                : (entry.modelPath().isEmpty() ? "(none)" : entry.modelPath() + " — not found");
+        final Label pathLabel = addInfoRow(infoGrid, 3, "Path", pathText);
+        pathLabel.setWrapText(true);
+        if (entry.resolvedPath() != null) {
+            final Tooltip tt = new Tooltip(entry.resolvedPath());
+            tt.setWrapText(false);
+            Tooltip.install(pathLabel, tt);
+        }
+
+        final VBox content = new VBox(imgPane, infoGrid);
+        content.setPrefWidth(340);
+        final javafx.scene.Scene scene = new javafx.scene.Scene(content);
+        scene.getStylesheets().add(getClass().getResource("/styles/app.css").toExternalForm());
+        popup.setScene(scene);
+        popup.show();
+
+        bgExec.execute(() -> {
+            final Image img = loadedPreviewFactory.loadTextureImage(
+                    entry.modelPath(), loadedMdxFile, loadedRootDirectory);
+            Platform.runLater(() -> {
+                imgView.setImage(img);
+                final int w = (int) img.getWidth(), h = (int) img.getHeight();
+                dimsLabel.setText(w + " × " + h + " px");
+                final double maxSide = Math.min(512, Math.max(w, h));
+                imgView.setFitWidth(maxSide);
+                imgView.setFitHeight(maxSide);
+                imgPane.getChildren().setAll(imgView);
+                imgPane.setPrefSize(maxSide, maxSide * h / Math.max(1, w));
+                popup.sizeToScene();
+            });
+        });
+    }
+
+    private static Label addInfoRow(final GridPane grid, final int row,
+                                     final String key, final String value) {
+        final Label k = new Label(key);
+        k.setStyle("-fx-font-weight:bold; -fx-text-fill:-color-fg-muted;");
+        final Label v = new Label(value);
+        v.setMaxWidth(Double.MAX_VALUE);
+        grid.add(k, 0, row);
+        grid.add(v, 1, row);
+        return v;
+    }
+
+    private static String buildGeosetText(final MdlxModel model) {
+        final StringBuilder sb = new StringBuilder();
+        for (int gi = 0; gi < model.geosets.size(); gi++) {
+            final MdlxGeoset g = model.geosets.get(gi);
+            if (g.lod != 0) continue;
+            final int verts = g.vertices == null ? 0 : g.vertices.length / 3;
+            final int tris  = g.faces   == null ? 0 : g.faces.length   / 3;
+            sb.append(String.format("Geoset %-2d  %5d verts  %5d tris  mat=%d%n",
+                    gi, verts, tris, g.materialId));
+            final int matIdx = (int) g.materialId;
+            if (matIdx >= 0 && matIdx < model.materials.size()) {
+                final var mat = model.materials.get(matIdx);
+                for (int li = 0; li < mat.layers.size(); li++) {
+                    final var layer = mat.layers.get(li);
+                    final String texName = layer.textureId >= 0 && layer.textureId < model.textures.size()
+                            ? texShortName(model.textures.get(layer.textureId))
+                            : "texId=" + layer.textureId;
+                    sb.append(String.format("  Layer %d  %-14s  %s%n", li, layer.filterMode, texName));
+                }
+            }
+        }
+        return sb.isEmpty() ? "(no renderable geosets)" : sb.toString();
+    }
+
+    private static String texShortName(final com.hiveworkshop.rms.parsers.mdlx.MdlxTexture tex) {
+        if (tex.replaceableId != 0) return "Replaceable#" + tex.replaceableId;
+        final String p = tex.path == null ? "" : tex.path.trim();
+        if (p.isEmpty()) return "(empty)";
+        final int slash = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+        return slash >= 0 ? p.substring(slash + 1) : p;
+    }
+
+    private void redrawLabels() {
+        if (labelCanvas == null || labelCheckBox == null) return;
+        final GraphicsContext gc = labelCanvas.getGraphicsContext2D();
+        gc.clearRect(0, 0, labelCanvas.getWidth(), labelCanvas.getHeight());
+        if (!labelCheckBox.isSelected()) return;
+        gc.setFont(Font.font("Consolas", 11));
+        gc.setLineWidth(2.5);
+        drawLabelSet(gc, boneLabelNodes,   boneLabelNames,   bonesCheckBox);
+        drawLabelSet(gc, attachLabelNodes, attachLabelNames, attachmentsCheckBox);
+    }
+
+    private void drawLabelSet(final GraphicsContext gc,
+                               final List<Node> nodes, final List<String> names,
+                               final CheckBox visBox) {
+        if (visBox != null && !visBox.isSelected()) return;
+        for (int i = 0; i < nodes.size() && i < names.size(); i++) {
+            try {
+                final javafx.geometry.Bounds sb = nodes.get(i).localToScreen(
+                        nodes.get(i).getBoundsInLocal());
+                if (sb == null) continue;
+                final Point2D cp = labelCanvas.screenToLocal(
+                        (sb.getMinX() + sb.getMaxX()) / 2,
+                        (sb.getMinY() + sb.getMaxY()) / 2);
+                if (cp == null) continue;
+                final double x = cp.getX() + 5, y = cp.getY() - 3;
+                gc.setStroke(Color.BLACK);
+                gc.strokeText(names.get(i), x, y);
+                gc.setFill(Color.rgb(255, 235, 100));
+                gc.fillText(names.get(i), x, y);
+            } catch (final Exception ignored) {}
+        }
     }
 
     private static float[] buildTexCoords(final MdlxGeoset geoset, final int vertexCount) {

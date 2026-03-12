@@ -23,6 +23,7 @@ import javafx.scene.shape.Rectangle;
 import javafx.util.Duration;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -66,7 +67,10 @@ public class ModelCard extends VBox {
         pathLabel.getStyleClass().add("asset-path");
         pathLabel.setWrapText(true);
 
-        Tooltip.install(this, new Tooltip(mdxFile.toString()));
+        // Rich tooltip — updated once the model loads; path-only in the meantime
+        final Tooltip cardTooltip = new Tooltip(mdxFile.toString());
+        cardTooltip.setShowDelay(Duration.millis(400));
+        Tooltip.install(this, cardTooltip);
 
         getChildren().addAll(previewPane, nameLabel, pathLabel);
         setAlignment(Pos.TOP_LEFT);
@@ -79,7 +83,7 @@ public class ModelCard extends VBox {
             }
         });
 
-        loadPreviewAsync(mdxFile, rootDirectory, previewFactory, executor);
+        loadPreviewAsync(mdxFile, rootDirectory, previewFactory, executor, cardTooltip);
     }
 
     private void startShimmer(final double w, final double h) {
@@ -124,11 +128,15 @@ public class ModelCard extends VBox {
             final Path mdxFile,
             final Path rootDirectory,
             final MdxPreviewFactory previewFactory,
-            final Executor executor
+            final Executor executor,
+            final Tooltip cardTooltip
     ) {
         CompletableFuture
                 .supplyAsync(() -> parseModel(previewFactory, mdxFile), executor)
-                .thenAccept(model -> Platform.runLater(() -> renderModel(model, mdxFile, rootDirectory, previewFactory)))
+                .thenAccept(model -> Platform.runLater(() -> {
+                    renderModel(model, mdxFile, rootDirectory, previewFactory);
+                    if (model != null) updateTooltip(cardTooltip, model, mdxFile);
+                }))
                 .exceptionally(error -> {
                     Platform.runLater(() -> showError("Preview failed"));
                     return null;
@@ -170,6 +178,21 @@ public class ModelCard extends VBox {
         final Label error = new Label(message);
         error.getStyleClass().add("preview-error");
         previewPane.getChildren().setAll(error);
+    }
+
+    private static void updateTooltip(final Tooltip tt, final MdlxModel model, final Path mdxFile) {
+        final int polyCount  = model.geosets.stream().mapToInt(g -> g.faces    != null ? g.faces.length    / 3 : 0).sum();
+        final int vertCount  = model.geosets.stream().mapToInt(g -> g.vertices != null ? g.vertices.length / 3 : 0).sum();
+        final int seqCount   = model.sequences.size();
+        final int boneCount  = model.bones.size();
+        long fileSize = 0;
+        try { fileSize = Files.size(mdxFile); } catch (final IOException ignored) {}
+        final String sizeStr = fileSize < 1024 ? fileSize + " B"
+                             : fileSize < 1024 * 1024 ? String.format("%.1f KB", fileSize / 1024.0)
+                             : String.format("%.2f MB", fileSize / (1024.0 * 1024));
+        tt.setText(String.format(
+                "%s%nPolys: %,d  Verts: %,d%nBones: %d  Seqs: %d%nSize: %s",
+                mdxFile.toString(), polyCount, vertCount, boneCount, seqCount, sizeStr));
     }
 
     private String toRelativePath(final Path root, final Path file) {

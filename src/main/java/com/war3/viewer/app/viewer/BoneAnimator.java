@@ -26,6 +26,17 @@ public final class BoneAnimator {
     private static final float[] IDENTITY_TRANS = {0f, 0f, 0f};
     private static final float[] IDENTITY_ROT   = {0f, 0f, 0f, 1f};
     private static final float[] IDENTITY_SCALE  = {1f, 1f, 1f};
+    private static final float[] IDENTITY_QUAT = {0f, 0f, 0f, 1f};
+    /**
+     * WC3 billboards are authored with a plane-facing basis different from the
+     * viewer's neutral camera basis; this aligns default billboard facing.
+     */
+    private static final float[] BILLBOARD_BASE = normalize(
+            0f,
+            (float) Math.sin(Math.toRadians(45.0)),
+            0f,
+            (float) Math.cos(Math.toRadians(45.0))
+    );
 
     private final MdlxModel model;
     /** All node objects sorted by objectId. */
@@ -36,6 +47,14 @@ public final class BoneAnimator {
     private final int[] parentIndices;
     /** Node indices in topological order (every parent appears before its children). */
     private final int[] topoOrder;
+    private final boolean hasBillboardNodes;
+
+    /** Full inverse camera rotation in model space. */
+    private final float[] inverseCameraRotation = IDENTITY_QUAT.clone();
+    /** Axis-twist variants, used for BillboardLockX/Y/Z-style behavior. */
+    private final float[] inverseCameraRotXSpin = IDENTITY_QUAT.clone();
+    private final float[] inverseCameraRotYSpin = IDENTITY_QUAT.clone();
+    private final float[] inverseCameraRotZSpin = IDENTITY_QUAT.clone();
 
     public BoneAnimator(final MdlxModel model) {
         this.model = model;
@@ -46,6 +65,7 @@ public final class BoneAnimator {
         }
         this.parentIndices = buildParentIndices();
         this.topoOrder = buildTopologicalOrder();
+        this.hasBillboardNodes = allNodes.stream().anyMatch(node -> (node.flags & 0x78) != 0);
     }
 
     // -------------------------------------------------------------------------
@@ -98,6 +118,42 @@ public final class BoneAnimator {
         return model.sequences;
     }
 
+    public boolean hasBillboardNodes() {
+        return hasBillboardNodes;
+    }
+
+    /**
+     * Returns the animated world position (WC3 Y-up space) of each node's pivot,
+     * keyed by objectId. Used for rendering animated bone/attachment indicators.
+     */
+    public Map<Integer, float[]> computeNodeWorldPositions(
+            final long frame, final long seqStart, final long seqEnd) {
+        final Matrix4f[] world = buildWorldTransforms(frame, seqStart, seqEnd);
+        final Map<Integer, float[]> result = new HashMap<>();
+        for (int i = 0; i < allNodes.size(); i++) {
+            if (world[i] == null) continue;
+            final MdlxGenericObject node = allNodes.get(i);
+            final float[] pivot = getPivot(node.objectId);
+            result.put(node.objectId, world[i].transformPoint(pivot[0], pivot[1], pivot[2]));
+        }
+        return result;
+    }
+
+    /**
+     * Sets the inverse camera rotation for billboarding, in model local space.
+     * The lock-X/Y/Z billboard variants are derived as twist components.
+     */
+    public void setInverseCameraRotation(final float[] quat) {
+        if (quat == null || quat.length < 4) {
+            setQuat(inverseCameraRotation, IDENTITY_QUAT);
+        } else {
+            setQuat(inverseCameraRotation, normalize(quat[0], quat[1], quat[2], quat[3]));
+        }
+        setQuat(inverseCameraRotXSpin, extractTwist(inverseCameraRotation, 1f, 0f, 0f));
+        setQuat(inverseCameraRotYSpin, extractTwist(inverseCameraRotation, 0f, 1f, 0f));
+        setQuat(inverseCameraRotZSpin, extractTwist(inverseCameraRotation, 0f, 0f, 1f));
+    }
+
     // -------------------------------------------------------------------------
     // Internal
     // -------------------------------------------------------------------------
@@ -132,6 +188,7 @@ public final class BoneAnimator {
 
     private Matrix4f[] buildWorldTransforms(final long frame, final long seqStart, final long seqEnd) {
         final Matrix4f[] world = new Matrix4f[allNodes.size()];
+        final float[][] worldRot = new float[allNodes.size()][4];
 
         // Iterate in topological order so every parent is computed before its children.
         for (final int i : topoOrder) {
@@ -141,13 +198,49 @@ public final class BoneAnimator {
             final float[] rot   = getTimeline4(node, AnimationMap.KGRT, frame, seqStart, seqEnd, IDENTITY_ROT);
             final float[] sc    = getTimeline3(node, AnimationMap.KGSC, frame, seqStart, seqEnd, IDENTITY_SCALE);
 
-            final Matrix4f local = Matrix4f.boneLocal(trans, rot, sc, pivot);
             final int parentIdx = parentIndices[i];
+
+            final float[] localRot = applyBillboardRotation(node.flags, rot);
+
+            // Match RenderNode2 logic for billboarded nodes: remove parent rotation
+            // from this node's local rotation before composing the local matrix.
+            if (isBillboarded(node.flags) && parentIdx >= 0 && worldRot[parentIdx] != null) {
+                final float[] invParent = conjugate(worldRot[parentIdx]);
+                setQuat(localRot, normalize(multiply(invParent, localRot)));
+            }
+
+            final Matrix4f local = Matrix4f.boneLocal(trans, localRot, sc, pivot);
             world[i] = (parentIdx < 0 || world[parentIdx] == null)
                     ? local
                     : Matrix4f.multiply(world[parentIdx], local);
+
+            if (parentIdx < 0 || worldRot[parentIdx] == null || isBillboarded(node.flags)) {
+                setQuat(worldRot[i], localRot);
+            } else {
+                setQuat(worldRot[i], normalize(multiply(worldRot[parentIdx], localRot)));
+            }
         }
         return world;
+    }
+
+    private float[] applyBillboardRotation(final int flags, final float[] defaultRotation) {
+        if ((flags & 0x8) != 0) { // BILLBOARDED
+            return normalize(multiply(inverseCameraRotation, BILLBOARD_BASE));
+        }
+        if ((flags & 0x10) != 0) { // BILLBOARDED_LOCK_X
+            return normalize(multiply(inverseCameraRotXSpin, BILLBOARD_BASE));
+        }
+        if ((flags & 0x20) != 0) { // BILLBOARDED_LOCK_Y
+            return normalize(multiply(inverseCameraRotYSpin, BILLBOARD_BASE));
+        }
+        if ((flags & 0x40) != 0) { // BILLBOARDED_LOCK_Z
+            return normalize(multiply(inverseCameraRotZSpin, BILLBOARD_BASE));
+        }
+        return defaultRotation;
+    }
+
+    private static boolean isBillboarded(final int flags) {
+        return (flags & 0x78) != 0;
     }
 
     // -------------------------------------------------------------------------
@@ -283,6 +376,49 @@ public final class BoneAnimator {
             s1 * a[2] + s2 * bz,
             s1 * a[3] + s2 * bw
         };
+    }
+
+    private static float[] multiply(final float[] a, final float[] b) {
+        // Hamilton product, XYZW format.
+        return new float[]{
+                a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+                a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+                a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+                a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]
+        };
+    }
+
+    private static float[] conjugate(final float[] q) {
+        return new float[]{-q[0], -q[1], -q[2], q[3]};
+    }
+
+    private static float[] normalize(final float x, final float y, final float z, final float w) {
+        final float len = (float) Math.sqrt((x * x) + (y * y) + (z * z) + (w * w));
+        if (len < 1e-8f) {
+            return IDENTITY_QUAT.clone();
+        }
+        final float inv = 1f / len;
+        return new float[]{x * inv, y * inv, z * inv, w * inv};
+    }
+
+    private static float[] normalize(final float[] q) {
+        return normalize(q[0], q[1], q[2], q[3]);
+    }
+
+    private static float[] extractTwist(final float[] q, final float ax, final float ay, final float az) {
+        // Twist decomposition: project quaternion vector part onto axis.
+        final float dot = (q[0] * ax) + (q[1] * ay) + (q[2] * az);
+        final float px = ax * dot;
+        final float py = ay * dot;
+        final float pz = az * dot;
+        return normalize(px, py, pz, q[3]);
+    }
+
+    private static void setQuat(final float[] target, final float[] source) {
+        target[0] = source[0];
+        target[1] = source[1];
+        target[2] = source[2];
+        target[3] = source[3];
     }
 
     // -------------------------------------------------------------------------
