@@ -20,6 +20,7 @@ import javafx.animation.AnimationTimer;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
+import javafx.geometry.Orientation;
 import javafx.geometry.Point2D;
 import javafx.geometry.Point3D;
 import javafx.geometry.Pos;
@@ -45,6 +46,7 @@ import javafx.scene.control.ListView;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.Slider;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.Separator;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
@@ -52,6 +54,9 @@ import javafx.scene.control.TextArea;
 import javafx.scene.control.Tooltip;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.image.PixelReader;
+import javafx.scene.image.PixelWriter;
+import javafx.scene.image.WritableImage;
 import javafx.scene.shape.Box;
 import javafx.scene.shape.Cylinder;
 import javafx.scene.layout.BorderPane;
@@ -355,16 +360,17 @@ public final class ModelDetailDialog extends Stage {
 
         final Label texHeader  = new Label("Textures");
         texHeader.setStyle("-fx-font-weight:bold; -fx-padding: 6 8 2 8;");
-        final Label geoHeader  = new Label("Geosets");
-        geoHeader.setStyle("-fx-font-weight:bold; -fx-padding: 4 8 2 8;");
+
+        final VBox diagPane = new VBox(texHeader, diagList);
+
+        // Materials tab
         geosetsArea = new TextArea();
         geosetsArea.setEditable(false);
         geosetsArea.setWrapText(false);
-        geosetsArea.setPrefHeight(130);
-        geosetsArea.setMaxHeight(200);
         geosetsArea.getStyleClass().add("diag-area");
-
-        final VBox diagPane = new VBox(texHeader, diagList, geoHeader, geosetsArea);
+        VBox.setVgrow(geosetsArea, Priority.ALWAYS);
+        final VBox materialsPane = new VBox(geosetsArea);
+        materialsPane.setPadding(new Insets(4));
 
         // Info tab (populated in setupModel)
         infoGrid = new GridPane();
@@ -380,14 +386,16 @@ public final class ModelDetailDialog extends Stage {
         infoScroll.setFitToWidth(true);
         infoScroll.setFitToHeight(true);
 
-        // Right panel: three tabs
-        final Tab diagTab = new Tab("Texture Diagnostics", diagPane);
+        // Right panel: tabs
+        final Tab diagTab      = new Tab("Textures",  diagPane);
         diagTab.setClosable(false);
+        final Tab materialsTab = new Tab("Materials", materialsPane);
+        materialsTab.setClosable(false);
         final Tab animTab = new Tab("Animation", animControls);
         animTab.setClosable(false);
         final Tab infoTab = new Tab("Info", infoScroll);
         infoTab.setClosable(false);
-        final TabPane rightTabPane = new TabPane(animTab, infoTab, diagTab);
+        final TabPane rightTabPane = new TabPane(animTab, infoTab, diagTab, materialsTab);
 
         // Horizontal split: 3-D view | right tab pane
         final SplitPane splitPane = new SplitPane(viewStack, rightTabPane);
@@ -1595,67 +1603,153 @@ public final class ModelDetailDialog extends Stage {
 
     private void showTexturePopup(final MdxPreviewFactory.TextureDiagEntry entry) {
         if (loadedPreviewFactory == null) return;
-        final Stage popup = new Stage();
-        popup.initOwner(this);
-        popup.initModality(javafx.stage.Modality.NONE);
-        popup.setTitle(entry.displayName());
 
+        // Navigable list: all non-replaceable entries in list order
+        final List<MdxPreviewFactory.TextureDiagEntry> nav = diagList.getItems().stream()
+                .filter(e -> e.source() != MdxPreviewFactory.TextureDiagEntry.Source.REPLACEABLE)
+                .toList();
+        if (nav.isEmpty()) return;
+
+        final int[]     idx     = { Math.max(0, nav.indexOf(entry)) };
+        final boolean[] alpha   = { false };
+        final boolean[] checker = { true  };
+        final Image[]   raw     = { null  };
+
+        // Image display
         final ImageView imgView = new ImageView();
         imgView.setPreserveRatio(true);
         imgView.setSmooth(true);
-        imgView.setFitWidth(512);
-        imgView.setFitHeight(512);
 
+        final Canvas checkerCanvas = new Canvas(256, 256);
         final ProgressIndicator spin = new ProgressIndicator();
         spin.setPrefSize(56, 56);
-        final StackPane imgPane = new StackPane(spin);
+        final StackPane imgPane = new StackPane(checkerCanvas, spin);
         imgPane.setPrefSize(280, 280);
         imgPane.setStyle("-fx-background-color:#1a1e26;");
 
+        // Info grid
         final GridPane infoGrid = new GridPane();
         infoGrid.setHgap(10); infoGrid.setVgap(6);
-        infoGrid.setPadding(new Insets(10, 12, 12, 12));
-        final ColumnConstraints kc = new ColumnConstraints();
-        kc.setMinWidth(80);
-        final ColumnConstraints vc = new ColumnConstraints();
-        vc.setHgrow(Priority.ALWAYS); vc.setFillWidth(true);
+        infoGrid.setPadding(new Insets(8, 12, 12, 12));
+        final ColumnConstraints kc = new ColumnConstraints(); kc.setMinWidth(80);
+        final ColumnConstraints vc = new ColumnConstraints(); vc.setHgrow(Priority.ALWAYS); vc.setFillWidth(true);
         infoGrid.getColumnConstraints().addAll(kc, vc);
-
         final Label dimsLabel = addInfoRow(infoGrid, 0, "Dimensions", "loading…");
-        addInfoRow(infoGrid, 1, "Format", entry.extension());
-        addInfoRow(infoGrid, 2, "Source", entry.source().name());
-        final String pathText = entry.resolvedPath() != null ? entry.resolvedPath()
-                : (entry.modelPath().isEmpty() ? "(none)" : entry.modelPath() + " — not found");
-        final Label pathLabel = addInfoRow(infoGrid, 3, "Path", pathText);
+        final Label fmtLabel  = addInfoRow(infoGrid, 1, "Format", "");
+        final Label srcLabel  = addInfoRow(infoGrid, 2, "Source", "");
+        final Label pathLabel = addInfoRow(infoGrid, 3, "Path", "");
         pathLabel.setWrapText(true);
-        if (entry.resolvedPath() != null) {
-            final Tooltip tt = new Tooltip(entry.resolvedPath());
-            tt.setWrapText(false);
-            Tooltip.install(pathLabel, tt);
-        }
+        final Tooltip pathTooltip = new Tooltip();
+        Tooltip.install(pathLabel, pathTooltip);
 
-        final VBox content = new VBox(imgPane, infoGrid);
-        content.setPrefWidth(340);
-        final javafx.scene.Scene scene = new javafx.scene.Scene(content);
+        // Navigation + toggle controls
+        final Button       prevBtn      = new Button("◀");
+        final Button       nextBtn      = new Button("▶");
+        final Label        navLabel     = new Label();
+        navLabel.setStyle("-fx-font-weight:bold; -fx-min-width:50px;");
+        navLabel.setAlignment(Pos.CENTER);
+        HBox.setHgrow(navLabel, Priority.ALWAYS);
+        final ToggleButton alphaToggle   = new ToggleButton("Alpha");
+        final ToggleButton checkerToggle = new ToggleButton("Transparent");
+        checkerToggle.setSelected(true);
+        final HBox controlBar = new HBox(6, prevBtn, navLabel, nextBtn,
+                new Separator(Orientation.VERTICAL), alphaToggle, checkerToggle);
+        controlBar.setAlignment(Pos.CENTER_LEFT);
+        controlBar.setPadding(new Insets(6, 10, 4, 10));
+
+        final Stage popup = new Stage();
+        popup.initOwner(this);
+        popup.initModality(Modality.NONE);
+
+        final VBox content = new VBox(controlBar, imgPane, infoGrid);
+        content.setPrefWidth(360);
+        final Scene scene = new Scene(content);
         scene.getStylesheets().add(getClass().getResource("/styles/app.css").toExternalForm());
         popup.setScene(scene);
         popup.show();
 
-        bgExec.execute(() -> {
-            final Image img = loadedPreviewFactory.loadTextureImage(
-                    entry.modelPath(), loadedMdxFile, loadedRootDirectory);
-            Platform.runLater(() -> {
-                imgView.setImage(img);
-                final int w = (int) img.getWidth(), h = (int) img.getHeight();
-                dimsLabel.setText(w + " × " + h + " px");
-                final double maxSide = Math.min(512, Math.max(w, h));
-                imgView.setFitWidth(maxSide);
-                imgView.setFitHeight(maxSide);
-                imgPane.getChildren().setAll(imgView);
-                imgPane.setPrefSize(maxSide, maxSide * h / Math.max(1, w));
-                popup.sizeToScene();
+        // Re-render the current image applying alpha/checker toggles
+        final Runnable refreshDisplay = () -> {
+            if (raw[0] == null) return;
+            imgView.setImage(alpha[0] ? extractAlphaChannel(raw[0]) : raw[0]);
+            checkerCanvas.setVisible(!alpha[0] && checker[0]);
+        };
+
+        // Load the entry at idx[0]
+        final Runnable loadEntry = () -> {
+            final MdxPreviewFactory.TextureDiagEntry e = nav.get(idx[0]);
+            popup.setTitle(e.displayName());
+            navLabel.setText((idx[0] + 1) + " / " + nav.size());
+            prevBtn.setDisable(idx[0] == 0);
+            nextBtn.setDisable(idx[0] == nav.size() - 1);
+            fmtLabel.setText(e.extension());
+            srcLabel.setText(e.source().name());
+            final String pt = e.resolvedPath() != null ? e.resolvedPath()
+                    : (e.modelPath().isEmpty() ? "(none)" : e.modelPath() + " — not found");
+            pathLabel.setText(pt);
+            pathTooltip.setText(pt);
+
+            dimsLabel.setText("loading…");
+            raw[0] = null;
+            imgPane.getChildren().setAll(checkerCanvas, spin);
+
+            bgExec.execute(() -> {
+                final Image img = loadedPreviewFactory.loadTextureImage(
+                        e.modelPath(), loadedMdxFile, loadedRootDirectory);
+                Platform.runLater(() -> {
+                    raw[0] = img;
+                    final int w = (int) img.getWidth(), h = (int) img.getHeight();
+                    dimsLabel.setText(w + " × " + h + " px");
+                    final double maxSide = Math.min(512, Math.max(w, h));
+                    imgView.setFitWidth(maxSide);
+                    imgView.setFitHeight(maxSide);
+                    checkerCanvas.setWidth(maxSide);
+                    checkerCanvas.setHeight(maxSide * h / Math.max(1.0, w));
+                    drawCheckerboard(checkerCanvas);
+                    imgPane.getChildren().setAll(checkerCanvas, imgView);
+                    imgPane.setPrefSize(maxSide, maxSide * h / Math.max(1, w));
+                    refreshDisplay.run();
+                    popup.sizeToScene();
+                });
             });
-        });
+        };
+
+        prevBtn.setOnAction(e    -> { idx[0]--;                           loadEntry.run(); });
+        nextBtn.setOnAction(e    -> { idx[0]++;                           loadEntry.run(); });
+        alphaToggle.setOnAction(e   -> { alpha[0]   = alphaToggle.isSelected();   refreshDisplay.run(); });
+        checkerToggle.setOnAction(e -> { checker[0] = checkerToggle.isSelected(); refreshDisplay.run(); });
+
+        loadEntry.run();
+    }
+
+    /** Returns a greyscale image where each pixel's brightness = the source alpha. */
+    private static Image extractAlphaChannel(final Image src) {
+        final int w = (int) src.getWidth(), h = (int) src.getHeight();
+        if (w <= 0 || h <= 0) return src;
+        final WritableImage out = new WritableImage(w, h);
+        final PixelReader pr = src.getPixelReader();
+        final PixelWriter pw = out.getPixelWriter();
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                final int a = (pr.getArgb(x, y) >>> 24) & 0xFF;
+                pw.setArgb(x, y, 0xFF000000 | (a << 16) | (a << 8) | a);
+            }
+        }
+        return out;
+    }
+
+    /** Draws a grey checkerboard pattern onto the canvas (8 px tiles). */
+    private static void drawCheckerboard(final Canvas canvas) {
+        final GraphicsContext gc = canvas.getGraphicsContext2D();
+        final int w = (int) canvas.getWidth(), h = (int) canvas.getHeight();
+        final int tile = 8;
+        gc.clearRect(0, 0, w, h);
+        for (int r = 0; r * tile < h; r++) {
+            for (int c = 0; c * tile < w; c++) {
+                gc.setFill(((r + c) % 2 == 0) ? Color.web("#cccccc") : Color.web("#888888"));
+                gc.fillRect(c * tile, r * tile, tile, tile);
+            }
+        }
     }
 
     private static Label addInfoRow(final GridPane grid, final int row,
