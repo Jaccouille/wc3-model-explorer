@@ -35,8 +35,11 @@ import java.io.File;
  *   Right – tabbed panel (Animation, Info, Textures, Materials, Geosets, Nodes)
  *
  * Layout reproduces the structure of War3AdvancedModelViewer's ModelDetailDialog.
+ *
+ * <p>Extends {@link JFrame} rather than {@code JDialog} so the OS supplies native
+ * minimize and maximize window controls (a {@code JDialog} only offers a close button).
  */
-public final class ModelViewerDialog extends JDialog {
+public final class ModelViewerDialog extends JFrame {
     private static final int VIEW_W = 850;
     private static final int DIAG_W = 550;
 
@@ -48,9 +51,13 @@ public final class ModelViewerDialog extends JDialog {
     private Timer scrubberSyncTimer;
 
     public ModelViewerDialog(JFrame owner, ModelAsset asset, Path scanRoot) {
-        super(owner, fmt("viewer.title", asset.fileName())
+        super(fmt("viewer.title", asset.fileName())
                 + (asset.metadata().modelName().isEmpty() ? ""
-                   : " (" + asset.metadata().modelName() + ")"), false);
+                   : " (" + asset.metadata().modelName() + ")"));
+        // Inherit the owner's taskbar/title-bar icon (JFrame has no owner concept).
+        if (owner != null && !owner.getIconImages().isEmpty()) {
+            setIconImages(owner.getIconImages());
+        }
         this.asset = asset;
         this.scanRoot = scanRoot;
         setSize(new Dimension(VIEW_W + DIAG_W, 700));
