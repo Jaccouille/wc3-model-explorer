@@ -399,20 +399,41 @@ public final class ModelViewerDialog extends JFrame {
         });
         scrubberSyncTimer.start();
 
-        // Speed slider
+        // Speed slider + editable field (0.01x – 3.00x, two-digit precision)
         JPanel speedRow = flowRow(get("viewer.speed"));
-        JLabel speedLabel = new JLabel("1.0x");
-        speedLabel.setPreferredSize(new Dimension(40, 20));
-        JSlider speedSlider = new JSlider(10, 300, 100);
+        JTextField speedField = new JTextField(4);
+        speedField.setHorizontalAlignment(JTextField.RIGHT);
+        speedField.setMaximumSize(new Dimension(56, 24));
+        speedField.setPreferredSize(new Dimension(56, 24));
+        JSlider speedSlider = new JSlider(1, 300, 100);
         speedSlider.setPreferredSize(new Dimension(160, 24));
         speedSlider.setEnabled(animData.hasAnimation());
+        speedField.setEnabled(animData.hasAnimation());
+        // Slider drives field/canvas; setText does not re-trigger the field, so no feedback loop.
         speedSlider.addChangeListener(e -> {
             float spd = speedSlider.getValue() / 100f;
-            speedLabel.setText(String.format("%.1fx", spd));
+            speedField.setText(String.format("%.2f", spd));
             if (previewCanvas != null) previewCanvas.setSpeed(spd);
         });
+        // Field commits on Enter or focus loss; clamps to 0.01–3.00 and snaps the slider.
+        Runnable applyField = () -> {
+            try {
+                float spd = Float.parseFloat(speedField.getText().trim().replace(',', '.'));
+                int pct = Math.max(1, Math.min(300, Math.round(spd * 100)));
+                speedSlider.setValue(pct);
+                speedField.setText(String.format("%.2f", pct / 100f));
+            } catch (NumberFormatException ex) {
+                speedField.setText(String.format("%.2f", speedSlider.getValue() / 100f));
+            }
+        };
+        speedField.addActionListener(e -> applyField.run());
+        speedField.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override public void focusLost(java.awt.event.FocusEvent e) { applyField.run(); }
+        });
+        speedField.setText(String.format("%.2f", speedSlider.getValue() / 100f));
+        if (previewCanvas != null) previewCanvas.setSpeed(speedSlider.getValue() / 100f);
         speedRow.add(speedSlider);
-        speedRow.add(speedLabel);
+        speedRow.add(speedField);
         panel.add(speedRow);
         panel.add(Box.createVerticalStrut(12));
 

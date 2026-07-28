@@ -1754,7 +1754,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     private volatile SequenceInfo pendingExtentUpdate;
     public void setPlaying(boolean p) { animPlaying = p; if (p) lastNanoNs = 0L; }
     public boolean isPlaying()        { return animPlaying; }
-    public void setSpeed(float s)     { animSpeed = Math.max(0.1f, s); }
+    public void setSpeed(float s)     { animSpeed = Math.max(0.01f, s); }
     public boolean hasAnimationData() { return animData.hasAnimation(); }
     public long getAnimTimeMs()       { return animTimeMs; }
     public void setAnimTimeMs(long t) {
