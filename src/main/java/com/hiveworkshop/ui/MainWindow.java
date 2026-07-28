@@ -612,6 +612,10 @@ public final class MainWindow extends JFrame {
         copyFileItem.addActionListener(e -> copyAssetFilesToClipboard(assets));
         popup.add(copyFileItem);
 
+        javax.swing.JMenuItem copyWithTexItem = new javax.swing.JMenuItem(get("main.copyWithTextures"));
+        copyWithTexItem.addActionListener(e -> copyModelsWithTextures(assets));
+        popup.add(copyWithTexItem);
+
         // Open file location
         if (!multiple) {
             JMenuItem openLocItem = new JMenuItem(get("main.openFileLocation"));
@@ -835,6 +839,93 @@ public final class MainWindow extends JFrame {
                 .toList();
         java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
                 .setContents(new FileListTransferable(files), null);
+    }
+
+    /**
+     * Copies the selected model files plus their custom (loose, on-disk) textures into a
+     * chosen destination folder, recreating each texture's referenced relative path.
+     * Textures that live inside CASC/MPQ archives, or that are replaceable/missing, are skipped.
+     */
+    private void copyModelsWithTextures(List<ModelAsset> assets) {
+        if (assets.isEmpty()) return;
+
+        JFileChooser fc = new JFileChooser();
+        fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        fc.setDialogTitle(get("main.copyWithTextures.chooseDest"));
+        if (lastChooserDir != null) fc.setCurrentDirectory(lastChooserDir);
+        if (fc.showDialog(this, get("main.copyWithTextures.select")) != JFileChooser.APPROVE_OPTION) return;
+        lastChooserDir = fc.getSelectedFile();
+        final Path dest = fc.getSelectedFile().toPath();
+        final Path scanRoot = currentScanRoot();
+
+        new Thread(() -> {
+            int models = 0, textures = 0, skipped = 0;
+            List<String> errors = new ArrayList<>();
+            com.hiveworkshop.parser.GameDataSource gds = com.hiveworkshop.parser.GameDataSource.getInstance();
+            for (ModelAsset asset : assets) {
+                try {
+                    Path modelSrc = asset.path();
+                    java.nio.file.Files.createDirectories(dest);
+                    java.nio.file.Files.copy(modelSrc, dest.resolve(asset.fileName()),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    models++;
+
+                    com.hiveworkshop.model.ReterasParsedModel pm =
+                            com.hiveworkshop.parser.ReterasModelParser.parse(modelSrc);
+                    Path modelDir = modelSrc.getParent();
+                    java.util.Set<String> seen = new java.util.HashSet<>();
+                    for (com.hiveworkshop.model.GeosetTexData td : pm.texData()) {
+                        if (!td.layers().isEmpty()) {
+                            for (var layer : td.layers()) {
+                                switch (copyOneTexture(gds, layer.texturePath(), layer.replaceableId(),
+                                        modelDir, scanRoot, dest, seen)) {
+                                    case 1 -> textures++;
+                                    case 0 -> skipped++;
+                                    default -> { /* duplicate or blank — ignore */ }
+                                }
+                            }
+                        } else {
+                            switch (copyOneTexture(gds, td.texturePath(), td.replaceableId(),
+                                    modelDir, scanRoot, dest, seen)) {
+                                case 1 -> textures++;
+                                case 0 -> skipped++;
+                                default -> { }
+                            }
+                        }
+                    }
+                } catch (Exception ex) {
+                    errors.add(asset.fileName() + ": " + ex.getMessage());
+                }
+            }
+            final int fModels = models, fTex = textures, fSkip = skipped;
+            SwingUtilities.invokeLater(() -> {
+                String msg = fmt("main.copyWithTextures.done", fModels, fTex, fSkip);
+                if (!errors.isEmpty()) msg += System.lineSeparator() + System.lineSeparator()
+                        + String.join(System.lineSeparator(), errors);
+                JOptionPane.showMessageDialog(this, msg, get("main.copyWithTextures"),
+                        errors.isEmpty() ? JOptionPane.INFORMATION_MESSAGE : JOptionPane.WARNING_MESSAGE);
+            });
+        }, "CopyWithTextures").start();
+    }
+
+    /**
+     * Copies a single texture reference to the destination, preserving its relative path.
+     * @return 1 if copied, 0 if skipped (archive/replaceable/missing), -1 if blank or duplicate.
+     */
+    private static int copyOneTexture(com.hiveworkshop.parser.GameDataSource gds, String texPath,
+            int replaceableId, Path modelDir, Path scanRoot, Path dest, java.util.Set<String> seen) {
+        if (texPath == null || texPath.isBlank() || replaceableId > 0) return -1;
+        if (!seen.add(texPath)) return -1;
+        Path texSrc = gds.resolveDiskFile(texPath, modelDir, scanRoot);
+        if (texSrc == null) return 0; // inside an archive or missing — skip per spec
+        try {
+            Path texDest = dest.resolve(texPath.replace('\\', '/'));
+            if (texDest.getParent() != null) java.nio.file.Files.createDirectories(texDest.getParent());
+            java.nio.file.Files.copy(texSrc, texDest, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            return 1;
+        } catch (Exception ex) {
+            return 0;
+        }
     }
 
     private List<ModelAsset> selectedAssets() {
