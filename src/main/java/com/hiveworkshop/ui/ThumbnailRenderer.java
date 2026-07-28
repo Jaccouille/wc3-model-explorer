@@ -158,7 +158,12 @@ public final class ThumbnailRenderer {
     }
 
     public void setAnimationName(String name) {
-        this.animationName = name == null ? "" : name.trim();
+        String trimmed = name == null ? "" : name.trim();
+        if (!trimmed.equals(animationName)) {
+            animationName = trimmed;
+            cancelPending();
+            clearCache(); // pose changed → invalidate memory + disk cache so thumbnails regenerate
+        }
     }
 
     public void setTeamColor(int idx) {
@@ -354,7 +359,8 @@ public final class ThumbnailRenderer {
         // Find matching animation sequence for pose and visibility
         SequenceInfo thumbSeq = null;
         Map<Integer, float[]> boneMatrices = null;
-        if (!animationName.isEmpty() && animData.hasAnimation()) {
+        // "None" (or an unmatched name) leaves thumbSeq null → model rendered in its default pose.
+        if (!animationName.isEmpty() && !animationName.equalsIgnoreCase("None") && animData.hasAnimation()) {
             thumbSeq = findSequence(animData.sequences(), animationName);
             if (thumbSeq != null) {
                 boneMatrices = BoneAnimator.computeWorldMatrices(

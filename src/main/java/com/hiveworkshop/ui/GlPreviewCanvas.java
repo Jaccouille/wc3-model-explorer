@@ -118,6 +118,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     // Animation (volatile: written from EDT, read from render thread)
     private volatile int     currentSeqIdx = -1;
+    private volatile boolean pendingNoSeqPose = false; // request a one-time rest-pose upload
     private volatile boolean animPlaying   = false;
     private volatile float   animSpeed     = 1.0f;
     private volatile long    animTimeMs    = 0L;
@@ -605,9 +606,12 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 // Even without a selected sequence, global animations should run
                 sampleLayerAlpha();
                 sampleTextureAnims();
-                // Billboard bones still need camera-facing transform even without a sequence
-                if (animData.bones().length > 0 && animatedVertices != null && hasBillboardBones()) {
+                // Restore the default (rest) pose once when "None" is selected;
+                // billboard bones still need a camera-facing refresh every frame.
+                if (animatedVertices != null && (pendingNoSeqPose
+                        || (animData.bones().length > 0 && hasBillboardBones()))) {
                     uploadAnimatedVerticesNoSequence();
+                    pendingNoSeqPose = false;
                 }
             }
             if (shadingMode == ShadingMode.GEOSET_COLORS && solidShader != 0 && geoVao != null) {
@@ -1738,6 +1742,15 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
 
     // ── Public API ───────────────────────────────────────────────────────────
 
+    /** Freezes the model in its default (rest) pose with no animation playing. */
+    public void setNoSequence() {
+        currentSeqIdx = -1;
+        animPlaying   = false;
+        animTimeMs    = 0L;
+        pendingNoSeqPose = true;
+        resetRibbons();
+        resetParticles2();
+    }
     public void setSequence(int idx) {
         if (idx < 0 || idx >= animData.sequences().size()) return;
         currentSeqIdx = idx;

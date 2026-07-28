@@ -338,8 +338,8 @@ public final class ModelViewerDialog extends JFrame {
         JButton recenterBtn = new JButton(get("viewer.recenter"));
         recenterBtn.addActionListener(e -> {
             if (previewCanvas == null) return;
-            int idx = seqCombo.getSelectedIndex();
-            SequenceInfo seq = (idx >= 0 && idx < sequences.size()) ? sequences.get(idx) : null;
+            int idx = seqCombo.getSelectedIndex(); // 0 == None; sequence k is at combo index k+1
+            SequenceInfo seq = (idx >= 1 && idx <= sequences.size()) ? sequences.get(idx - 1) : null;
             previewCanvas.reframeToSequence(seq);
         });
         playRow.add(playPauseBtn);
@@ -574,10 +574,20 @@ public final class ModelViewerDialog extends JFrame {
             if (suppressCallback[0]) return;
             if (previewCanvas != null) {
                 int idx = seqCombo.getSelectedIndex();
-                previewCanvas.setSequence(idx);
+                if (idx <= 0) { // index 0 == "None" — freeze in default pose
+                    previewCanvas.setNoSequence();
+                    playPauseBtn.setText(get("viewer.play"));
+                    timeSlider.setValue(0);
+                    timeSlider.setEnabled(false);
+                    timeLabel.setText("0 ms");
+                    return;
+                }
+                int seqIdx = idx - 1;
+                previewCanvas.setSequence(seqIdx);
+                timeSlider.setEnabled(animData.hasAnimation());
                 // Update scrubber range for new sequence
-                if (idx >= 0 && idx < sequences.size()) {
-                    SequenceInfo seq = sequences.get(idx);
+                if (seqIdx >= 0 && seqIdx < sequences.size()) {
+                    SequenceInfo seq = sequences.get(seqIdx);
                     int dur = (int)(seq.end() - seq.start());
                     timeSlider.setMaximum(Math.max(1, dur));
                     timeSlider.setValue(0);
@@ -589,9 +599,10 @@ public final class ModelViewerDialog extends JFrame {
         // Sync combo when sequence changes via keyboard shortcut
         if (previewCanvas != null) {
             previewCanvas.setOnSequenceChanged(idx -> {
-                if (idx >= 0 && idx < seqCombo.getItemCount()) {
+                int comboIdx = idx + 1; // sequence k maps to combo index k+1 (index 0 is "None")
+                if (comboIdx >= 0 && comboIdx < seqCombo.getItemCount()) {
                     suppressCallback[0] = true;
-                    seqCombo.setSelectedIndex(idx);
+                    seqCombo.setSelectedIndex(comboIdx);
                     suppressCallback[0] = false;
                 }
                 // Update scrubber range
@@ -603,6 +614,12 @@ public final class ModelViewerDialog extends JFrame {
                     timeLabel.setText("0 ms");
                 }
             });
+        }
+
+        // Combo defaults to "None" (index 0); the constructor auto-plays the first
+        // sequence, so select it here so the combo/scrubber stay in sync.
+        if (!sequences.isEmpty()) {
+            seqCombo.setSelectedIndex(1);
         }
 
         // Glue at bottom
@@ -1709,9 +1726,10 @@ public final class ModelViewerDialog extends JFrame {
         if (sequences.isEmpty()) {
             return new JComboBox<>(new String[]{get("viewer.noSequences")});
         }
-        String[] labels = sequences.stream()
-                .map(SequenceInfo::displayLabel)
-                .toArray(String[]::new);
+        // "None" (default pose, no animation) is index 0; real sequences follow at 1..n.
+        String[] labels = new String[sequences.size() + 1];
+        labels[0] = get("viewer.sequenceNone");
+        for (int i = 0; i < sequences.size(); i++) labels[i + 1] = sequences.get(i).displayLabel();
         return new JComboBox<>(labels);
     }
 
