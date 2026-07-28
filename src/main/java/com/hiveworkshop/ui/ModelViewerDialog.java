@@ -50,6 +50,11 @@ public final class ModelViewerDialog extends JFrame {
     private Throwable canvasError; // non-null if GL canvas creation failed
     private Timer scrubberSyncTimer;
 
+    // Grid controls kept in sync (overlay toggle button + animation-tab checkbox)
+    private JToggleButton gridOverlayBtn;
+    private JCheckBox gridCheckbox;
+    private boolean syncingGrid;
+
     public ModelViewerDialog(JFrame owner, ModelAsset asset, Path scanRoot) {
         super(fmt("viewer.title", asset.fileName())
                 + (asset.metadata().modelName().isEmpty() ? ""
@@ -135,6 +140,8 @@ public final class ModelViewerDialog extends JFrame {
             JLabel statsLabel = buildStatsHud();
             JComboBox<String> shadingCombo = buildShadingCombo();
             JButton screenshotBtn = buildScreenshotButton();
+            JToggleButton gridBtn = buildGridOverlayButton();
+            JButton recenterBtn = buildRecenterButton();
 
             // JLayeredPane with doLayout() override to reliably size children
             JLayeredPane layered = new JLayeredPane() {
@@ -143,16 +150,29 @@ public final class ModelViewerDialog extends JFrame {
                     int w = getWidth(), h = getHeight();
                     previewCanvas.setBounds(0, 0, w, h);
                     statsLabel.setBounds(8, 8, 150, 95);
-                    Dimension cs = shadingCombo.getPreferredSize();
-                    shadingCombo.setBounds(w - cs.width - 8, 8, cs.width, cs.height);
-                    Dimension ss = screenshotBtn.getPreferredSize();
-                    screenshotBtn.setBounds(w - ss.width - 8, h - ss.height - 8, ss.width, ss.height);
+                    // Uniform width for the shading select + overlay buttons, right-aligned
+                    int cw = Math.max(
+                            Math.max(shadingCombo.getPreferredSize().width, gridBtn.getPreferredSize().width),
+                            Math.max(recenterBtn.getPreferredSize().width, screenshotBtn.getPreferredSize().width));
+                    int x = w - cw - 8;
+                    int ch = shadingCombo.getPreferredSize().height;
+                    shadingCombo.setBounds(x, 8, cw, ch);
+                    // Grid + recenter buttons stacked just below the shading combo
+                    int gh = gridBtn.getPreferredSize().height;
+                    int gridY = 8 + ch + 6;
+                    gridBtn.setBounds(x, gridY, cw, gh);
+                    int rh = recenterBtn.getPreferredSize().height;
+                    recenterBtn.setBounds(x, gridY + gh + 4, cw, rh);
+                    int sh = screenshotBtn.getPreferredSize().height;
+                    screenshotBtn.setBounds(x, h - sh - 8, cw, sh);
                 }
             };
 
             layered.add(previewCanvas, JLayeredPane.DEFAULT_LAYER);
             layered.add(statsLabel, JLayeredPane.PALETTE_LAYER);
             layered.add(shadingCombo, JLayeredPane.PALETTE_LAYER);
+            layered.add(gridBtn, JLayeredPane.PALETTE_LAYER);
+            layered.add(recenterBtn, JLayeredPane.PALETTE_LAYER);
             layered.add(screenshotBtn, JLayeredPane.PALETTE_LAYER);
 
             layered.setPreferredSize(new Dimension(VIEW_W, 600));
@@ -266,6 +286,35 @@ public final class ModelViewerDialog extends JFrame {
         return btn;
     }
 
+    private JToggleButton buildGridOverlayButton() {
+        JToggleButton btn = new JToggleButton(get("viewer.showGrid"), true);
+        btn.setFocusable(false);
+        btn.setToolTipText(get("viewer.gridToggleTooltip"));
+        btn.addActionListener(e -> setGridVisible(btn.isSelected()));
+        this.gridOverlayBtn = btn;
+        return btn;
+    }
+
+    private JButton buildRecenterButton() {
+        JButton btn = new JButton(get("viewer.recenter"));
+        btn.setFocusable(false);
+        btn.setToolTipText(get("viewer.recenterTooltip"));
+        btn.addActionListener(e -> {
+            if (previewCanvas != null) previewCanvas.reframeToSequence(previewCanvas.getCurrentSequence());
+        });
+        return btn;
+    }
+
+    /** Applies grid visibility to the canvas and keeps both grid controls in sync. */
+    private void setGridVisible(boolean on) {
+        if (syncingGrid) return;
+        syncingGrid = true;
+        if (previewCanvas != null) previewCanvas.setShowGrid(on);
+        if (gridCheckbox != null && gridCheckbox.isSelected() != on) gridCheckbox.setSelected(on);
+        if (gridOverlayBtn != null && gridOverlayBtn.isSelected() != on) gridOverlayBtn.setSelected(on);
+        syncingGrid = false;
+    }
+
     // ── Right panel: tabbed pane ─────────────────────────────────────────
 
     private JTabbedPane buildRightTabs() {
@@ -335,16 +384,8 @@ public final class ModelViewerDialog extends JFrame {
         previewCanvas.setOnAnimationFinished(() -> {
             playPauseBtn.setText(get("viewer.play"));
         });
-        JButton recenterBtn = new JButton(get("viewer.recenter"));
-        recenterBtn.addActionListener(e -> {
-            if (previewCanvas == null) return;
-            int idx = seqCombo.getSelectedIndex(); // 0 == None; sequence k is at combo index k+1
-            SequenceInfo seq = (idx >= 1 && idx <= sequences.size()) ? sequences.get(idx - 1) : null;
-            previewCanvas.reframeToSequence(seq);
-        });
         playRow.add(playPauseBtn);
         playRow.add(loopCheckbox);
-        playRow.add(recenterBtn);
         panel.add(playRow);
         panel.add(Box.createVerticalStrut(8));
 
@@ -527,12 +568,10 @@ public final class ModelViewerDialog extends JFrame {
         panel.add(collisionCheckbox);
         panel.add(Box.createVerticalStrut(6));
 
-        // Grid toggle
-        JCheckBox gridCheckbox = new JCheckBox(get("viewer.showGrid"), true);
+        // Grid toggle (kept in sync with the scene-overlay grid button)
+        gridCheckbox = new JCheckBox(get("viewer.showGrid"), true);
         gridCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
-        gridCheckbox.addActionListener(e -> {
-            if (previewCanvas != null) previewCanvas.setShowGrid(gridCheckbox.isSelected());
-        });
+        gridCheckbox.addActionListener(e -> setGridVisible(gridCheckbox.isSelected()));
         panel.add(gridCheckbox);
         panel.add(Box.createVerticalStrut(6));
 
