@@ -57,6 +57,9 @@ public final class AppSettings {
     private boolean tagsEnabled = true;
     private java.util.Set<String> removedTags = new java.util.LinkedHashSet<>();
     private java.util.Map<String, java.util.Set<String>> customModelTags = new java.util.LinkedHashMap<>();
+    // Model-viewer control state (grid/overlays/shading/speed/etc.), persisted so the
+    // next opened model reuses the last settings. Stored as simple key=value strings.
+    private java.util.Map<String, String> viewerPrefs = new java.util.LinkedHashMap<>();
 
     private AppSettings(Path settingsPath) {
         this.settingsPath = settingsPath;
@@ -257,6 +260,22 @@ public final class AppSettings {
         return all;
     }
 
+    // ── Model-viewer control preferences ─────────────────────────────────
+    public boolean viewerBool(String key, boolean def) {
+        String v = viewerPrefs.get(key);
+        return v == null ? def : Boolean.parseBoolean(v);
+    }
+
+    public int viewerInt(String key, int def) {
+        String v = viewerPrefs.get(key);
+        if (v == null) return def;
+        try { return Integer.parseInt(v); } catch (NumberFormatException ignored) { return def; }
+    }
+
+    public void setViewerPref(String key, boolean value) { viewerPrefs.put(key, String.valueOf(value)); }
+
+    public void setViewerPref(String key, int value) { viewerPrefs.put(key, String.valueOf(value)); }
+
     public void save() {
         Properties properties = new Properties();
         properties.setProperty(KEY_LAST_ROOT_DIRECTORY, lastRootDirectory);
@@ -293,6 +312,10 @@ public final class AppSettings {
             }
         }
         properties.setProperty("customTag.count", String.valueOf(cti));
+
+        for (var entry : viewerPrefs.entrySet()) {
+            properties.setProperty("viewerpref." + entry.getKey(), entry.getValue());
+        }
 
         try {
             Path parent = settingsPath.getParent();
@@ -362,6 +385,12 @@ public final class AppSettings {
                 String ctTags = properties.getProperty("customTag." + i + ".tags", "");
                 if (!ctPath.isBlank() && !ctTags.isBlank()) {
                     customModelTags.put(ctPath, new java.util.LinkedHashSet<>(Arrays.asList(ctTags.split("\\|"))));
+                }
+            }
+            viewerPrefs = new java.util.LinkedHashMap<>();
+            for (String name : properties.stringPropertyNames()) {
+                if (name.startsWith("viewerpref.")) {
+                    viewerPrefs.put(name.substring("viewerpref.".length()), properties.getProperty(name));
                 }
             }
         } catch (IOException ignored) {

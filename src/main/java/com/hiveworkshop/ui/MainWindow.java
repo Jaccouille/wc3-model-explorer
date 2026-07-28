@@ -1008,7 +1008,7 @@ public final class MainWindow extends JFrame {
             return;
         }
         Path scanRoot = currentScanRoot();
-        ModelViewerDialog dialog = new ModelViewerDialog(this, asset, scanRoot);
+        ModelViewerDialog dialog = new ModelViewerDialog(this, asset, scanRoot, settings);
         dialog.setLocationRelativeTo(this);
         dialog.setVisible(true);
     }

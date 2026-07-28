@@ -47,6 +47,7 @@ public final class ModelViewerDialog extends JFrame {
     private final ReterasParsedModel parsedModel;
     private final ModelAsset asset;
     private final Path scanRoot;
+    private final AppSettings settings; // shared with MainWindow so saves don't clobber
     private Throwable canvasError; // non-null if GL canvas creation failed
     private Timer scrubberSyncTimer;
 
@@ -54,8 +55,9 @@ public final class ModelViewerDialog extends JFrame {
     private JToggleButton gridOverlayBtn;
     private JCheckBox gridCheckbox;
     private boolean syncingGrid;
+    private JComboBox<String> shadingCombo; // referenced by the reset-to-defaults action
 
-    public ModelViewerDialog(JFrame owner, ModelAsset asset, Path scanRoot) {
+    public ModelViewerDialog(JFrame owner, ModelAsset asset, Path scanRoot, AppSettings settings) {
         super(fmt("viewer.title", asset.fileName())
                 + (asset.metadata().modelName().isEmpty() ? ""
                    : " (" + asset.metadata().modelName() + ")"));
@@ -63,6 +65,7 @@ public final class ModelViewerDialog extends JFrame {
         if (owner != null && !owner.getIconImages().isEmpty()) {
             setIconImages(owner.getIconImages());
         }
+        this.settings = settings;
         this.asset = asset;
         this.scanRoot = scanRoot;
         setSize(new Dimension(VIEW_W + DIAG_W, 700));
@@ -88,8 +91,7 @@ public final class ModelViewerDialog extends JFrame {
             canvasError = t;
         }
         if (createdCanvas != null) {
-            AppSettings s = AppSettings.loadDefault();
-            createdCanvas.setInitialCamera(s.cameraYaw(), s.cameraPitch());
+            createdCanvas.setInitialCamera(settings.cameraYaw(), settings.cameraPitch());
         }
         this.previewCanvas = createdCanvas;
 
@@ -120,12 +122,15 @@ public final class ModelViewerDialog extends JFrame {
         // Auto-select first sequence
         if (previewCanvas != null) {
             // Apply background color from settings
-            AppSettings s = AppSettings.loadDefault();
-            previewCanvas.setBackgroundColor(s.bgColor());
+            previewCanvas.setBackgroundColor(settings.bgColor());
             if (parsedModel.animData().hasAnimation()) {
-                previewCanvas.setSequence(0);
-                previewCanvas.setPlaying(true);
-                previewCanvas.reframeToSequence(parsedModel.animData().sequences().get(0));
+                if (settings.viewerBool("noSequence", false)) {
+                    previewCanvas.setNoSequence(); // restore last "None" (default pose) state
+                } else {
+                    previewCanvas.setSequence(0);
+                    previewCanvas.setPlaying(settings.viewerBool("playing", true));
+                    previewCanvas.reframeToSequence(parsedModel.animData().sequences().get(0));
+                }
             }
         }
     }
@@ -231,28 +236,36 @@ public final class ModelViewerDialog extends JFrame {
             get("viewer.solid"), get("viewer.textured"), get("viewer.lit"), get("viewer.normals"),
             get("viewer.geosetsMode"), get("viewer.boneCount"), get("viewer.wireframe")
         });
-        combo.setSelectedIndex(1);
         combo.setOpaque(false);
         combo.addActionListener(e -> {
-            if (previewCanvas == null) return;
-            int idx = combo.getSelectedIndex();
-            if (idx == 6) { // Wireframe
-                previewCanvas.setShadingMode(GlPreviewCanvas.ShadingMode.SOLID);
-                previewCanvas.setWireframe(true);
-            } else {
-                previewCanvas.setWireframe(false);
-                GlPreviewCanvas.ShadingMode mode = switch (idx) {
-                    case 0  -> GlPreviewCanvas.ShadingMode.SOLID;
-                    case 2  -> GlPreviewCanvas.ShadingMode.LIT;
-                    case 3  -> GlPreviewCanvas.ShadingMode.NORMALS;
-                    case 4  -> GlPreviewCanvas.ShadingMode.GEOSET_COLORS;
-                    case 5  -> GlPreviewCanvas.ShadingMode.BONE_COUNT;
-                    default -> GlPreviewCanvas.ShadingMode.TEXTURED;
-                };
-                previewCanvas.setShadingMode(mode);
-            }
+            applyShadingMode(combo.getSelectedIndex());
+            persist("shadingIndex", combo.getSelectedIndex());
         });
+        int persisted = settings.viewerInt("shadingIndex", 1);
+        combo.setSelectedIndex(persisted);
+        applyShadingMode(persisted); // ensure canvas matches even when persisted == current index
+        this.shadingCombo = combo;
         return combo;
+    }
+
+    /** Applies the shading combo selection (index 6 == wireframe) to the canvas. */
+    private void applyShadingMode(int idx) {
+        if (previewCanvas == null) return;
+        if (idx == 6) { // Wireframe
+            previewCanvas.setShadingMode(GlPreviewCanvas.ShadingMode.SOLID);
+            previewCanvas.setWireframe(true);
+        } else {
+            previewCanvas.setWireframe(false);
+            GlPreviewCanvas.ShadingMode mode = switch (idx) {
+                case 0  -> GlPreviewCanvas.ShadingMode.SOLID;
+                case 2  -> GlPreviewCanvas.ShadingMode.LIT;
+                case 3  -> GlPreviewCanvas.ShadingMode.NORMALS;
+                case 4  -> GlPreviewCanvas.ShadingMode.GEOSET_COLORS;
+                case 5  -> GlPreviewCanvas.ShadingMode.BONE_COUNT;
+                default -> GlPreviewCanvas.ShadingMode.TEXTURED;
+            };
+            previewCanvas.setShadingMode(mode);
+        }
     }
 
     private JButton buildScreenshotButton() {
@@ -287,7 +300,7 @@ public final class ModelViewerDialog extends JFrame {
     }
 
     private JToggleButton buildGridOverlayButton() {
-        JToggleButton btn = new JToggleButton(get("viewer.showGrid"), true);
+        JToggleButton btn = new JToggleButton(get("viewer.showGrid"), settings.viewerBool("showGrid", true));
         btn.setFocusable(false);
         btn.setToolTipText(get("viewer.gridToggleTooltip"));
         btn.addActionListener(e -> setGridVisible(btn.isSelected()));
@@ -313,6 +326,16 @@ public final class ModelViewerDialog extends JFrame {
         if (gridCheckbox != null && gridCheckbox.isSelected() != on) gridCheckbox.setSelected(on);
         if (gridOverlayBtn != null && gridOverlayBtn.isSelected() != on) gridOverlayBtn.setSelected(on);
         syncingGrid = false;
+        persist("showGrid", on);
+    }
+
+    // Persist a single viewer preference and flush to disk (used on every control change).
+    private void persist(String key, boolean value) { settings.setViewerPref(key, value); settings.save(); }
+    private void persist(String key, int value)     { settings.setViewerPref(key, value); settings.save(); }
+
+    /** Sets a checkbox to {@code target} via doClick so its ActionListener fires (setSelected does not). */
+    private static void setChecked(JCheckBox box, boolean target) {
+        if (box.isEnabled() && box.isSelected() != target) box.doClick();
     }
 
     // ── Right panel: tabbed pane ─────────────────────────────────────────
@@ -368,18 +391,21 @@ public final class ModelViewerDialog extends JFrame {
 
         // Play / Pause + Loop
         JPanel playRow = flowRow();
-        JButton playPauseBtn = new JButton(get("viewer.stop"));
+        JButton playPauseBtn = new JButton(settings.viewerBool("playing", true) ? get("viewer.stop") : get("viewer.play"));
         playPauseBtn.setEnabled(animData.hasAnimation());
         playPauseBtn.addActionListener(e -> {
             if (previewCanvas == null) return;
             boolean nowPlaying = !previewCanvas.isPlaying();
             previewCanvas.setPlaying(nowPlaying);
             playPauseBtn.setText(nowPlaying ? get("viewer.stop") : get("viewer.play"));
+            persist("playing", nowPlaying);
         });
-        JCheckBox loopCheckbox = new JCheckBox(get("viewer.loop"), true);
+        JCheckBox loopCheckbox = new JCheckBox(get("viewer.loop"), settings.viewerBool("loop", true));
         loopCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setLooping(loopCheckbox.isSelected());
+            persist("loop", loopCheckbox.isSelected());
         });
+        if (previewCanvas != null) previewCanvas.setLooping(loopCheckbox.isSelected());
         // Reset button to "Play" when a non-looping animation finishes
         previewCanvas.setOnAnimationFinished(() -> {
             playPauseBtn.setText(get("viewer.play"));
@@ -446,7 +472,7 @@ public final class ModelViewerDialog extends JFrame {
         speedField.setHorizontalAlignment(JTextField.RIGHT);
         speedField.setMaximumSize(new Dimension(56, 24));
         speedField.setPreferredSize(new Dimension(56, 24));
-        JSlider speedSlider = new JSlider(1, 300, 100);
+        JSlider speedSlider = new JSlider(1, 300, settings.viewerInt("speedPct", 100));
         speedSlider.setPreferredSize(new Dimension(160, 24));
         speedSlider.setEnabled(animData.hasAnimation());
         speedField.setEnabled(animData.hasAnimation());
@@ -455,6 +481,7 @@ public final class ModelViewerDialog extends JFrame {
             float spd = speedSlider.getValue() / 100f;
             speedField.setText(String.format("%.2f", spd));
             if (previewCanvas != null) previewCanvas.setSpeed(spd);
+            if (!speedSlider.getValueIsAdjusting()) persist("speedPct", speedSlider.getValue());
         });
         // Field commits on Enter or focus loss; clamps to 0.01–3.00 and snaps the slider.
         Runnable applyField = () -> {
@@ -483,62 +510,80 @@ public final class ModelViewerDialog extends JFrame {
         panel.add(Box.createVerticalStrut(8));
 
         // Extent overlay
-        JCheckBox extentCheckbox = new JCheckBox(get("viewer.showExtent"));
+        JCheckBox extentCheckbox = new JCheckBox(get("viewer.showExtent"), settings.viewerBool("showExtent", false));
         extentCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         extentCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setShowExtent(extentCheckbox.isSelected());
+            persist("showExtent", extentCheckbox.isSelected());
         });
+        if (previewCanvas != null) previewCanvas.setShowExtent(extentCheckbox.isSelected());
         panel.add(extentCheckbox);
         panel.add(Box.createVerticalStrut(6));
 
         // Node overlays
-        JCheckBox bonesCheckbox = new JCheckBox(get("viewer.bonesOverlay"));
+        JCheckBox bonesCheckbox = new JCheckBox(get("viewer.bonesOverlay"), settings.viewerBool("showBones", false));
         bonesCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         bonesCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setShowBones(bonesCheckbox.isSelected());
+            persist("showBones", bonesCheckbox.isSelected());
         });
+        if (previewCanvas != null) previewCanvas.setShowBones(bonesCheckbox.isSelected());
         panel.add(bonesCheckbox);
         panel.add(Box.createVerticalStrut(4));
 
-        JCheckBox helpersCheckbox = new JCheckBox(get("viewer.helpers"));
+        JCheckBox helpersCheckbox = new JCheckBox(get("viewer.helpers"), settings.viewerBool("showHelpers", false));
         helpersCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         helpersCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setShowHelpers(helpersCheckbox.isSelected());
+            persist("showHelpers", helpersCheckbox.isSelected());
         });
+        if (previewCanvas != null) previewCanvas.setShowHelpers(helpersCheckbox.isSelected());
         panel.add(helpersCheckbox);
         panel.add(Box.createVerticalStrut(4));
 
-        JCheckBox attachmentsCheckbox = new JCheckBox(get("viewer.attachments"));
+        JCheckBox attachmentsCheckbox = new JCheckBox(get("viewer.attachments"), settings.viewerBool("showAttachments", false));
         attachmentsCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         attachmentsCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setShowAttachments(attachmentsCheckbox.isSelected());
+            persist("showAttachments", attachmentsCheckbox.isSelected());
         });
+        if (previewCanvas != null) previewCanvas.setShowAttachments(attachmentsCheckbox.isSelected());
         panel.add(attachmentsCheckbox);
         panel.add(Box.createVerticalStrut(4));
 
-        JCheckBox ribbonsCheckbox = new JCheckBox(get("viewer.ribbonEmitters"));
+        boolean hasRibbons = parsedModel.ribbonEmitters().length > 0;
+        JCheckBox ribbonsCheckbox = new JCheckBox(get("viewer.ribbonEmitters"),
+                hasRibbons && settings.viewerBool("showRibbons", false));
         ribbonsCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
-        ribbonsCheckbox.setEnabled(parsedModel.ribbonEmitters().length > 0);
+        ribbonsCheckbox.setEnabled(hasRibbons);
         ribbonsCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setShowRibbonEmitters(ribbonsCheckbox.isSelected());
+            persist("showRibbons", ribbonsCheckbox.isSelected());
         });
+        if (previewCanvas != null) previewCanvas.setShowRibbonEmitters(ribbonsCheckbox.isSelected());
         panel.add(ribbonsCheckbox);
         panel.add(Box.createVerticalStrut(4));
 
-        JCheckBox particlesCheckbox = new JCheckBox(get("viewer.particleEmitters"));
+        boolean hasParticles = parsedModel.particleEmitters2().length > 0;
+        JCheckBox particlesCheckbox = new JCheckBox(get("viewer.particleEmitters"),
+                hasParticles && settings.viewerBool("showParticles", false));
         particlesCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
-        particlesCheckbox.setEnabled(parsedModel.particleEmitters2().length > 0);
+        particlesCheckbox.setEnabled(hasParticles);
         particlesCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setShowParticleEmitters(particlesCheckbox.isSelected());
+            persist("showParticles", particlesCheckbox.isSelected());
         });
+        if (previewCanvas != null) previewCanvas.setShowParticleEmitters(particlesCheckbox.isSelected());
         panel.add(particlesCheckbox);
         panel.add(Box.createVerticalStrut(4));
 
-        JCheckBox nodeNamesCheckbox = new JCheckBox(get("viewer.nodeNames"));
+        JCheckBox nodeNamesCheckbox = new JCheckBox(get("viewer.nodeNames"), settings.viewerBool("showNodeNames", false));
         nodeNamesCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         nodeNamesCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setShowNodeNames(nodeNamesCheckbox.isSelected());
+            persist("showNodeNames", nodeNamesCheckbox.isSelected());
         });
+        if (previewCanvas != null) previewCanvas.setShowNodeNames(nodeNamesCheckbox.isSelected());
         panel.add(nodeNamesCheckbox);
         panel.add(Box.createVerticalStrut(6));
 
@@ -546,65 +591,108 @@ public final class ModelViewerDialog extends JFrame {
         JPanel nodeSizeRow = flowRow(get("viewer.nodeSize"));
         JLabel nodeSizeLabel = new JLabel("3.0");
         nodeSizeLabel.setPreferredSize(new Dimension(30, 20));
-        JSlider nodeSizeSlider = new JSlider(5, 200, 30); // 0.5 to 20.0 (÷10)
+        JSlider nodeSizeSlider = new JSlider(5, 200, settings.viewerInt("nodeSize", 30)); // 0.5 to 20.0 (÷10)
         nodeSizeSlider.setPreferredSize(new Dimension(120, 24));
         nodeSizeSlider.addChangeListener(e -> {
             float sz = nodeSizeSlider.getValue() / 10f;
             nodeSizeLabel.setText(String.format("%.1f", sz));
             if (previewCanvas != null) previewCanvas.setNodeSize(sz);
+            if (!nodeSizeSlider.getValueIsAdjusting()) persist("nodeSize", nodeSizeSlider.getValue());
         });
+        nodeSizeLabel.setText(String.format("%.1f", nodeSizeSlider.getValue() / 10f));
+        if (previewCanvas != null) previewCanvas.setNodeSize(nodeSizeSlider.getValue() / 10f);
         nodeSizeRow.add(nodeSizeSlider);
         nodeSizeRow.add(nodeSizeLabel);
         panel.add(nodeSizeRow);
         panel.add(Box.createVerticalStrut(6));
 
         // Collision shapes overlay
-        JCheckBox collisionCheckbox = new JCheckBox(get("viewer.collisionShapes"));
+        boolean hasCollision = parsedModel.collisionShapes().length > 0;
+        JCheckBox collisionCheckbox = new JCheckBox(get("viewer.collisionShapes"),
+                hasCollision && settings.viewerBool("showCollision", false));
         collisionCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
-        collisionCheckbox.setEnabled(parsedModel.collisionShapes().length > 0);
+        collisionCheckbox.setEnabled(hasCollision);
         collisionCheckbox.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setShowCollision(collisionCheckbox.isSelected());
+            persist("showCollision", collisionCheckbox.isSelected());
         });
+        if (previewCanvas != null) previewCanvas.setShowCollision(collisionCheckbox.isSelected());
         panel.add(collisionCheckbox);
         panel.add(Box.createVerticalStrut(6));
 
-        // Grid toggle (kept in sync with the scene-overlay grid button)
-        gridCheckbox = new JCheckBox(get("viewer.showGrid"), true);
+        // Grid toggle (kept in sync with the scene-overlay grid button; setGridVisible persists)
+        gridCheckbox = new JCheckBox(get("viewer.showGrid"), settings.viewerBool("showGrid", true));
         gridCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
         gridCheckbox.addActionListener(e -> setGridVisible(gridCheckbox.isSelected()));
+        if (previewCanvas != null) previewCanvas.setShowGrid(gridCheckbox.isSelected());
         panel.add(gridCheckbox);
         panel.add(Box.createVerticalStrut(6));
 
         // Camera View checkbox
         CameraNode[] cameras = parsedModel.cameras();
-        JCheckBox cameraViewCheckbox = new JCheckBox(get("viewer.cameraView"));
+        boolean hasCameras = cameras.length > 0;
+        JCheckBox cameraViewCheckbox = new JCheckBox(get("viewer.cameraView"),
+                hasCameras && settings.viewerBool("cameraView", false));
         cameraViewCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
-        cameraViewCheckbox.setEnabled(cameras.length > 0);
+        cameraViewCheckbox.setEnabled(hasCameras);
         cameraViewCheckbox.addActionListener(e -> {
             if (previewCanvas != null) {
-                if (cameraViewCheckbox.isSelected() && cameras.length > 0) {
+                if (cameraViewCheckbox.isSelected() && hasCameras) {
                     previewCanvas.applyCameraView(cameras[0]);
                 } else {
                     previewCanvas.resetCameraView();
                 }
             }
+            persist("cameraView", cameraViewCheckbox.isSelected());
         });
+        if (previewCanvas != null && cameraViewCheckbox.isSelected() && hasCameras) {
+            previewCanvas.applyCameraView(cameras[0]);
+        }
         panel.add(cameraViewCheckbox);
         panel.add(Box.createVerticalStrut(6));
 
         // Team color selector
         JPanel tcRow = flowRow(get("viewer.teamColor"));
         JComboBox<String> tcCombo = new JComboBox<>(TeamColorOptions.labels());
-        tcCombo.setSelectedIndex(previewCanvas != null ? previewCanvas.getTeamColor() : 0);
+        int tcInit = Math.max(0, Math.min(tcCombo.getItemCount() - 1, settings.viewerInt("teamColor", 0)));
+        tcCombo.setSelectedIndex(tcInit);
         tcCombo.setRenderer(new TeamColorComboRenderer(tcCombo, idx -> {
             int[] rgb = GameDataSource.getInstance().loadTeamColorRgb(idx, asset.path().getParent(), scanRoot);
             return rgb != null ? rgb : TeamColorOptions.fallbackRgb(idx);
         }));
         tcCombo.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setTeamColor(tcCombo.getSelectedIndex());
+            persist("teamColor", tcCombo.getSelectedIndex());
         });
+        if (previewCanvas != null) previewCanvas.setTeamColor(tcCombo.getSelectedIndex());
         tcRow.add(tcCombo);
         panel.add(tcRow);
+        panel.add(Box.createVerticalStrut(6));
+
+        // Reset every animation-tab parameter to its default state
+        panel.add(new JSeparator(SwingConstants.HORIZONTAL));
+        panel.add(Box.createVerticalStrut(6));
+        JButton resetParamsBtn = new JButton(get("viewer.resetParams"));
+        resetParamsBtn.setAlignmentX(Component.LEFT_ALIGNMENT);
+        resetParamsBtn.setToolTipText(get("viewer.resetParamsTooltip"));
+        resetParamsBtn.addActionListener(e -> {
+            setChecked(loopCheckbox, true);
+            speedSlider.setValue(100);
+            nodeSizeSlider.setValue(30);
+            setChecked(extentCheckbox, false);
+            setChecked(bonesCheckbox, false);
+            setChecked(helpersCheckbox, false);
+            setChecked(attachmentsCheckbox, false);
+            setChecked(ribbonsCheckbox, false);
+            setChecked(particlesCheckbox, false);
+            setChecked(nodeNamesCheckbox, false);
+            setChecked(collisionCheckbox, false);
+            setChecked(cameraViewCheckbox, false);
+            tcCombo.setSelectedIndex(0);
+            if (shadingCombo != null) shadingCombo.setSelectedIndex(1);
+            setGridVisible(true);
+        });
+        panel.add(resetParamsBtn);
         panel.add(Box.createVerticalStrut(6));
 
         // Wire sequence combo
@@ -619,10 +707,12 @@ public final class ModelViewerDialog extends JFrame {
                     timeSlider.setValue(0);
                     timeSlider.setEnabled(false);
                     timeLabel.setText("0 ms");
+                    persist("noSequence", true);
                     return;
                 }
                 int seqIdx = idx - 1;
                 previewCanvas.setSequence(seqIdx);
+                persist("noSequence", false);
                 timeSlider.setEnabled(animData.hasAnimation());
                 // Update scrubber range for new sequence
                 if (seqIdx >= 0 && seqIdx < sequences.size()) {
@@ -655,10 +745,19 @@ public final class ModelViewerDialog extends JFrame {
             });
         }
 
-        // Combo defaults to "None" (index 0); the constructor auto-plays the first
-        // sequence, so select it here so the combo/scrubber stay in sync.
+        // Restore the last sequence-selection state: "None" (index 0) or first sequence (index 1).
         if (!sequences.isEmpty()) {
-            seqCombo.setSelectedIndex(1);
+            if (settings.viewerBool("noSequence", false)) {
+                // Combo already defaults to index 0 (None), so setSelectedIndex(0) won't fire the
+                // listener — apply the None UI state explicitly (canvas handled in the constructor).
+                seqCombo.setSelectedIndex(0);
+                playPauseBtn.setText(get("viewer.play"));
+                timeSlider.setValue(0);
+                timeSlider.setEnabled(false);
+                timeLabel.setText("0 ms");
+            } else {
+                seqCombo.setSelectedIndex(1); // fires listener → setSequence(0) + scrubber range
+            }
         }
 
         // Glue at bottom
