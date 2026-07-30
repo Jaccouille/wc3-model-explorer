@@ -50,5 +50,7 @@ hs_err_pid*.log
 
 ### Project-specific ###
 libs/
-com/
+# Vendored Retera Model Studio .class files live in the repo-root com/ only.
+# Anchored with a leading slash so it does NOT also ignore src/main/java/com/.
+/com/
 PLANS.md
