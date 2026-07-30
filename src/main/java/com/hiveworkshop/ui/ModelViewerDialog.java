@@ -129,9 +129,13 @@ public final class ModelViewerDialog extends JFrame {
                 } else {
                     previewCanvas.setSequence(0);
                     previewCanvas.setPlaying(settings.viewerBool("playing", true));
-                    previewCanvas.reframeToSequence(parsedModel.animData().sequences().get(0));
                 }
             }
+            // Frame the camera once the window is realized, so the initial view matches a manual
+            // "Recenter". Done deferred because during construction the canvas isn't laid out yet.
+            SwingUtilities.invokeLater(() -> {
+                if (previewCanvas != null) previewCanvas.reframeToSequence(previewCanvas.getCurrentSequence());
+            });
         }
     }
 
