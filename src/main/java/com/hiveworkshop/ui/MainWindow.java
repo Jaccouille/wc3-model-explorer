@@ -116,6 +116,8 @@ public final class MainWindow extends JFrame {
     private final JList<ModelAsset> assetList = new JList<>(listModel);
     private final List<ModelAsset> allAssets = new ArrayList<>();
     private final AppSettings settings = AppSettings.loadDefault();
+    /** Above this many selected models, "Open in viewer" asks for confirmation first. */
+    private static final int OPEN_IN_VIEWER_WARN_THRESHOLD = 10;
     private int baseCardWidth;
     private int baseCardHeight;
     private Timer progressiveLoadTimer;
@@ -269,7 +271,7 @@ public final class MainWindow extends JFrame {
             @Override
             public void mouseClicked(MouseEvent event) {
                 if (event.getClickCount() == 2 && assetList.getSelectedValue() != null) {
-                    showModelDetails(assetList.getSelectedValue());
+                    showModelDetails(assetList.getSelectedValue(), 0);
                 }
             }
             @Override
@@ -596,6 +598,24 @@ public final class MainWindow extends JFrame {
     private void showAssetContextMenu(List<ModelAsset> assets, java.awt.Component comp, int x, int y) {
         javax.swing.JPopupMenu popup = new javax.swing.JPopupMenu();
         boolean multiple = assets.size() > 1;
+
+        // Open each selected model in its own viewer window
+        javax.swing.JMenuItem openViewerItem = new javax.swing.JMenuItem(
+                multiple ? get("main.openInViewerMultiple") : get("main.openInViewer"));
+        openViewerItem.addActionListener(e -> {
+            // Each viewer spins up its own OpenGL canvas; warn before opening a lot at once.
+            if (assets.size() > OPEN_IN_VIEWER_WARN_THRESHOLD) {
+                int choice = JOptionPane.showConfirmDialog(this,
+                        fmt("main.openInViewerWarn", assets.size()),
+                        get("main.openInViewerWarnTitle"),
+                        JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+                if (choice != JOptionPane.OK_OPTION) return;
+            }
+            int i = 0;
+            for (ModelAsset a : assets) showModelDetails(a, i++);
+        });
+        popup.add(openViewerItem);
+        popup.addSeparator();
 
         // Copy path
         javax.swing.JMenuItem copyPathItem = new javax.swing.JMenuItem(multiple ? get("main.copyPaths") : get("main.copyPath"));
@@ -1000,6 +1020,12 @@ public final class MainWindow extends JFrame {
     }
 
     private void showModelDetails(ModelAsset asset) {
+        showModelDetails(asset, 0);
+    }
+
+    /** Opens a model in its own viewer window; cascadeIndex offsets the window so
+     *  several opened at once (e.g. multi-select "Open in viewer") don't fully overlap. */
+    private void showModelDetails(ModelAsset asset, int cascadeIndex) {
         if (asset.metadata().isHd()) {
             JOptionPane.showMessageDialog(this,
                     fmt("main.hdUnsupportedDetail", asset.fileName()),
@@ -1010,6 +1036,9 @@ public final class MainWindow extends JFrame {
         Path scanRoot = currentScanRoot();
         ModelViewerDialog dialog = new ModelViewerDialog(this, asset, scanRoot, settings);
         dialog.setLocationRelativeTo(this);
+        if (cascadeIndex > 0) {
+            dialog.setLocation(dialog.getX() + cascadeIndex * 32, dialog.getY() + cascadeIndex * 32);
+        }
         dialog.setVisible(true);
     }
 
