@@ -33,6 +33,8 @@ dependencies {
     implementation("org.json:json:20240303")
     implementation("com.formdev:flatlaf:3.4")
     implementation("net.nikr:dds:1.0.0")
+    // TGA texture support: self-registers a TGA ImageIO reader via SPI.
+    implementation("com.twelvemonkeys.imageio:imageio-tga:3.12.0")
 
     implementation(platform("org.lwjgl:lwjgl-bom:3.3.6"))
     implementation("org.lwjgl:lwjgl")

@@ -8,11 +8,16 @@ import systems.crigges.jmpq3.JMpqEditor;
 import systems.crigges.jmpq3.MPQOpenOption;
 
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
+import javax.imageio.stream.MemoryCacheImageInputStream;
 import java.awt.image.BufferedImage;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
@@ -464,7 +469,7 @@ public final class GameDataSource {
             // Use InputStream so ImageIO SPI (blp-iio-plugin) can handle BLP files
             BufferedImage img;
             try (InputStream is = Files.newInputStream(path)) {
-                img = ImageIO.read(is);
+                img = decodeImage(is);
             }
             if (img != null) {
                 System.out.println("[GameDataSource] Read OK: " + path);
@@ -507,20 +512,29 @@ public final class GameDataSource {
     }
 
     /** Returns the original path plus extension variants for texture resolution.
-     *  Handles .blp↔.dds and .tif→.dds (Reforged HD models reference .tif but CASC stores .dds).
+     *  Handles .blp↔.dds, .tif→.dds (Reforged HD models reference .tif but CASC stores .dds),
+     *  and .tga as a loose-file fallback for .blp/.dds references (custom models ship TGA).
      *  When only CASC is loaded (no MPQ), .dds is preferred over .blp since CASC stores DDS textures. */
     private String[] extensionVariants(String normalised) {
         boolean cascOnly = isCascOnly();
         String lower = normalised.toLowerCase(Locale.ROOT);
         if (lower.endsWith(".blp")) {
-            String ddsVariant = normalised.substring(0, normalised.length() - 4) + ".dds";
-            return cascOnly ? new String[]{ddsVariant, normalised}
-                            : new String[]{normalised, ddsVariant};
+            String base = normalised.substring(0, normalised.length() - 4);
+            String ddsVariant = base + ".dds";
+            String tgaVariant = base + ".tga";
+            return cascOnly ? new String[]{ddsVariant, normalised, tgaVariant}
+                            : new String[]{normalised, ddsVariant, tgaVariant};
         }
         if (lower.endsWith(".dds")) {
-            String blpVariant = normalised.substring(0, normalised.length() - 4) + ".blp";
-            return cascOnly ? new String[]{normalised, blpVariant}
-                            : new String[]{blpVariant, normalised};
+            String base = normalised.substring(0, normalised.length() - 4);
+            String blpVariant = base + ".blp";
+            String tgaVariant = base + ".tga";
+            return cascOnly ? new String[]{normalised, blpVariant, tgaVariant}
+                            : new String[]{blpVariant, normalised, tgaVariant};
+        }
+        if (lower.endsWith(".tga")) {
+            String base = normalised.substring(0, normalised.length() - 4);
+            return new String[]{normalised, base + ".blp", base + ".dds"};
         }
         if (lower.endsWith(".tif") || lower.endsWith(".tiff")) {
             int dotIdx = normalised.lastIndexOf('.');
@@ -554,10 +568,35 @@ public final class GameDataSource {
         if (!src.has(path)) return null;
         try (InputStream is = src.getResourceAsStream(path)) {
             if (is == null) return null;
-            return ImageIO.read(is);  // blp-iio-plugin registers a BLP ImageReader via SPI
+            return decodeImage(is);
         } catch (Exception ex) {
             System.err.println("[GameDataSource] Failed to decode '" + path + "': " + ex.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * Decodes an image from a stream using an explicitly-configured ImageIO reader.
+     * <p>
+     * We cannot use {@link ImageIO#read(InputStream)}: it opens the reader in
+     * seek-forward-only mode, which flushes bytes as they are read. The TGA reader
+     * needs to seek backward (it reads the header, then probes end-of-file for a
+     * footer), so a forward-only stream throws "pos &lt; flushedPos". Wrapping the
+     * stream in a seekable {@link MemoryCacheImageInputStream} and setting
+     * {@code seekForwardOnly=false} lets every registered reader (BLP, DDS, TGA,
+     * PNG, …) decode correctly.
+     */
+    private static BufferedImage decodeImage(InputStream is) throws IOException {
+        try (ImageInputStream iis = new MemoryCacheImageInputStream(is)) {
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(iis);
+            if (!readers.hasNext()) return null;
+            ImageReader reader = readers.next();
+            try {
+                reader.setInput(iis, false, false);
+                return reader.read(0);
+            } finally {
+                reader.dispose();
+            }
         }
     }
 }
