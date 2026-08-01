@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build portable app image
+        run: |
+          chmod +x gradlew
+          # gradle.properties hardcodes a local Windows JDK path; override it
+          # with the JDK setup-java just installed.
+          ./gradlew --no-daemon -Dorg.gradle.java.home="$JAVA_HOME" jpackageImage
+
+      - name: Package archive
+        run: |
+          tag="${GITHUB_REF_NAME:-manual}"
+          case "${{ runner.os }}" in
+            Windows) 7z a "WC3ModelExplorer-${tag}-windows.zip" ./build/jpackage/* ;;
+            macOS)   tar -C build/jpackage -czf "WC3ModelExplorer-${tag}-macos.tar.gz" . ;;
+            Linux)   tar -C build/jpackage -czf "WC3ModelExplorer-${tag}-linux.tar.gz" . ;;
+          esac
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WC3ModelExplorer-${{ runner.os }}
+          path: |
+            WC3ModelExplorer-*.zip
+            WC3ModelExplorer-*.tar.gz
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            WC3ModelExplorer-*.zip
+            WC3ModelExplorer-*.tar.gz
