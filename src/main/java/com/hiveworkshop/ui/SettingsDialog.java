@@ -102,6 +102,7 @@ public final class SettingsDialog extends JDialog {
     private static final LanguageEntry[] LANGUAGES = {
             new LanguageEntry("en", "English"),
             new LanguageEntry("fr", "Français"),
+            new LanguageEntry("es", "Español"),
             new LanguageEntry("zh-CN", "简体中文"),
     };
     private final JComboBox<LanguageEntry> languageCombo = new JComboBox<>(LANGUAGES);
