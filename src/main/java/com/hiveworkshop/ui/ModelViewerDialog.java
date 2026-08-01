@@ -68,8 +68,12 @@ public final class ModelViewerDialog extends JFrame {
         this.settings = settings;
         this.asset = asset;
         this.scanRoot = scanRoot;
-        setSize(new Dimension(VIEW_W + DIAG_W, 700));
+        setSize(new Dimension(settings.uiInt("viewerWindowWidth", VIEW_W + DIAG_W),
+                              settings.uiInt("viewerWindowHeight", 700)));
         setMinimumSize(new Dimension(800, 600));
+        if (settings.uiBool("viewerWindowMaximized", false)) {
+            setExtendedState(getExtendedState() | JFrame.MAXIMIZED_BOTH);
+        }
         setLayout(new BorderLayout());
 
         ReterasModelParser.invalidate(asset.path()); // ensure fresh parse with latest extractor
@@ -100,6 +104,7 @@ public final class ModelViewerDialog extends JFrame {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
+                persistWindowBounds();
                 if (scrubberSyncTimer != null) scrubberSyncTimer.stop();
                 if (previewCanvas == null) { dispose(); return; }
                 new Thread(() -> {
@@ -336,6 +341,17 @@ public final class ModelViewerDialog extends JFrame {
     // Persist a single viewer preference and flush to disk (used on every control change).
     private void persist(String key, boolean value) { settings.setViewerPref(key, value); settings.save(); }
     private void persist(String key, int value)     { settings.setViewerPref(key, value); settings.save(); }
+
+    /** Persists this viewer window's size/maximized state (shared across all viewer windows). */
+    private void persistWindowBounds() {
+        boolean maximized = (getExtendedState() & JFrame.MAXIMIZED_BOTH) != 0;
+        settings.setUiPref("viewerWindowMaximized", maximized);
+        if (!maximized) {
+            settings.setUiPref("viewerWindowWidth", getWidth());
+            settings.setUiPref("viewerWindowHeight", getHeight());
+        }
+        settings.save();
+    }
 
     /** Sets a checkbox to {@code target} via doClick so its ActionListener fires (setSelected does not). */
     private static void setChecked(JCheckBox box, boolean target) {

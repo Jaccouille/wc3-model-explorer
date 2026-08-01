@@ -135,12 +135,17 @@ public final class MainWindow extends JFrame {
         buildUi();
         wireEvents();
         restoreSettings();
-        setSize(new Dimension(1000, 700));
+        setSize(new Dimension(settings.uiInt("mainWindowWidth", 1000),
+                              settings.uiInt("mainWindowHeight", 700)));
         setMinimumSize(new Dimension(900, 600));
         setLocationRelativeTo(null);
+        if (settings.uiBool("mainWindowMaximized", false)) {
+            setExtendedState(getExtendedState() | JFrame.MAXIMIZED_BOTH);
+        }
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
+                persistWindowAndFilters();
                 if (thumbnailRenderer != null) thumbnailRenderer.shutdown();
                 if (currentMapSource != null) {
                     currentMapSource.close();
@@ -542,6 +547,7 @@ public final class MainWindow extends JFrame {
         }));
         thumbnailTeamColorCombo.setSelectedIndex(settings.thumbnailTeamColor());
         thumbnailTeamColorCombo.setToolTipText(get("main.thumbnailTeamColor"));
+        restoreFilters();
         updateCardSizing();
         // Initialise data sources in background so startup is not blocked
         updateDataSourceLabel();
@@ -553,6 +559,55 @@ public final class MainWindow extends JFrame {
         if (!rootText.isEmpty()) {
             startScan(false);
         }
+    }
+
+    /** Restores the last-used sort/search/advanced-filter selections into the controls. */
+    private void restoreFilters() {
+        try {
+            sortCombo.setSelectedItem(SortOrder.valueOf(
+                    settings.uiString("sortOrder", SortOrder.NAME_ASC.name())));
+        } catch (IllegalArgumentException ignored) {
+            // Unknown/removed enum constant — keep the default selection.
+        }
+        searchField.setText(settings.uiString("searchText", ""));
+        animationFilterField.setText(settings.uiString("filterAnimation", ""));
+        textureFilterField.setText(settings.uiString("filterTexture", ""));
+        minPolygonsField.setText(settings.uiString("filterMinPoly", ""));
+        maxPolygonsField.setText(settings.uiString("filterMaxPoly", ""));
+        minSizeKbField.setText(settings.uiString("filterMinSizeKb", ""));
+        maxSizeKbField.setText(settings.uiString("filterMaxSizeKb", ""));
+        // Reveal the advanced panel if any advanced filter was restored, so the
+        // active filtering is visible to the user rather than silently applied.
+        boolean anyAdvanced = !animationFilterField.getText().isEmpty()
+                || !textureFilterField.getText().isEmpty()
+                || !minPolygonsField.getText().isEmpty()
+                || !maxPolygonsField.getText().isEmpty()
+                || !minSizeKbField.getText().isEmpty()
+                || !maxSizeKbField.getText().isEmpty();
+        if (anyAdvanced) {
+            advancedFiltersToggle.setSelected(true);
+            advancedFiltersPanel.setVisible(true);
+        }
+    }
+
+    /** Persists window size/maximized state and all main-window filter selections. */
+    private void persistWindowAndFilters() {
+        boolean maximized = (getExtendedState() & JFrame.MAXIMIZED_BOTH) != 0;
+        settings.setUiPref("mainWindowMaximized", maximized);
+        if (!maximized) {
+            settings.setUiPref("mainWindowWidth", getWidth());
+            settings.setUiPref("mainWindowHeight", getHeight());
+        }
+        SortOrder sort = (SortOrder) sortCombo.getSelectedItem();
+        settings.setUiPref("sortOrder", (sort != null ? sort : SortOrder.NAME_ASC).name());
+        settings.setUiPref("searchText", searchField.getText());
+        settings.setUiPref("filterAnimation", animationFilterField.getText());
+        settings.setUiPref("filterTexture", textureFilterField.getText());
+        settings.setUiPref("filterMinPoly", minPolygonsField.getText());
+        settings.setUiPref("filterMaxPoly", maxPolygonsField.getText());
+        settings.setUiPref("filterMinSizeKb", minSizeKbField.getText());
+        settings.setUiPref("filterMaxSizeKb", maxSizeKbField.getText());
+        settings.save();
     }
 
     /** Updates the data source indicator label in the status bar. */

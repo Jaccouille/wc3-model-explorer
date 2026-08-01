@@ -60,6 +60,9 @@ public final class AppSettings {
     // Model-viewer control state (grid/overlays/shading/speed/etc.), persisted so the
     // next opened model reuses the last settings. Stored as simple key=value strings.
     private java.util.Map<String, String> viewerPrefs = new java.util.LinkedHashMap<>();
+    // General UI state (window sizes, main-window filter selections). Same simple
+    // key=value design as viewerPrefs, persisted under the "ui." property prefix.
+    private java.util.Map<String, String> uiPrefs = new java.util.LinkedHashMap<>();
 
     private AppSettings(Path settingsPath) {
         this.settingsPath = settingsPath;
@@ -276,6 +279,31 @@ public final class AppSettings {
 
     public void setViewerPref(String key, int value) { viewerPrefs.put(key, String.valueOf(value)); }
 
+    // ── General UI preferences (window sizes, main-window filters) ───────
+    public String uiString(String key, String def) {
+        String v = uiPrefs.get(key);
+        return v == null ? def : v;
+    }
+
+    public int uiInt(String key, int def) {
+        String v = uiPrefs.get(key);
+        if (v == null) return def;
+        try { return Integer.parseInt(v); } catch (NumberFormatException ignored) { return def; }
+    }
+
+    public boolean uiBool(String key, boolean def) {
+        String v = uiPrefs.get(key);
+        return v == null ? def : Boolean.parseBoolean(v);
+    }
+
+    public void setUiPref(String key, String value) {
+        if (value == null) uiPrefs.remove(key); else uiPrefs.put(key, value);
+    }
+
+    public void setUiPref(String key, int value) { uiPrefs.put(key, String.valueOf(value)); }
+
+    public void setUiPref(String key, boolean value) { uiPrefs.put(key, String.valueOf(value)); }
+
     public void save() {
         Properties properties = new Properties();
         properties.setProperty(KEY_LAST_ROOT_DIRECTORY, lastRootDirectory);
@@ -315,6 +343,10 @@ public final class AppSettings {
 
         for (var entry : viewerPrefs.entrySet()) {
             properties.setProperty("viewerpref." + entry.getKey(), entry.getValue());
+        }
+
+        for (var entry : uiPrefs.entrySet()) {
+            properties.setProperty("ui." + entry.getKey(), entry.getValue());
         }
 
         try {
@@ -388,9 +420,12 @@ public final class AppSettings {
                 }
             }
             viewerPrefs = new java.util.LinkedHashMap<>();
+            uiPrefs = new java.util.LinkedHashMap<>();
             for (String name : properties.stringPropertyNames()) {
                 if (name.startsWith("viewerpref.")) {
                     viewerPrefs.put(name.substring("viewerpref.".length()), properties.getProperty(name));
+                } else if (name.startsWith("ui.")) {
+                    uiPrefs.put(name.substring("ui.".length()), properties.getProperty(name));
                 }
             }
         } catch (IOException ignored) {
