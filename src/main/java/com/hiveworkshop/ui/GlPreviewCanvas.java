@@ -600,8 +600,11 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                     sampleLayerAlpha();
                     sampleTextureAnims();
                 }
-                simulateRibbons(lastDtSec);
-                simulateParticles2(lastDtSec);
+                // Freeze ribbon/particle emitters when the animation is stopped/paused.
+                if (animPlaying) {
+                    simulateRibbons(lastDtSec);
+                    simulateParticles2(lastDtSec);
+                }
             } else {
                 // Even without a selected sequence, global animations should run
                 sampleLayerAlpha();
@@ -750,8 +753,11 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
                 SequenceInfo seq = animData.sequences().get(currentSeqIdx);
                 lastWorldMap = BoneAnimator.computeWorldMatrices(
                         animData.bones(), animTimeMs, seq.start(), seq.end(), animData.globalSequences(), globalSeqTimeMs);
-                simulateRibbons(lastDtSec);
-                simulateParticles2(lastDtSec);
+                // Freeze ribbon/particle emitters when the animation is stopped/paused.
+                if (animPlaying) {
+                    simulateRibbons(lastDtSec);
+                    simulateParticles2(lastDtSec);
+                }
             }
             // Draw ribbons and particles
             if (ribbonStates != null && ribbonStates.length > 0) {
@@ -1378,7 +1384,7 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         long nowNs = System.nanoTime(), prev = lastNanoNs;
         if (prev == 0L) { lastNanoNs = nowNs; lastDtSec = 0f; return; }
         long deltaNs = nowNs - prev; lastNanoNs = nowNs;
-        // Always compute real dt so particles/ribbons can continue expiring
+        // Real per-frame dt; ribbon/particle simulation uses it but only runs while playing.
         lastDtSec = (float)(deltaNs / 1_000_000_000.0 * animSpeed);
         if (!animPlaying) return;
         long deltaMs = (long)(deltaNs / 1_000_000.0 * animSpeed);
