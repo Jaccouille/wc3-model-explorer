@@ -51,12 +51,6 @@ public final class ThumbnailRenderer {
     private int renderSize = 512; // supersample then downsample
     private boolean fboNeedsResize;
 
-    private static final int[][] DEFAULT_TEAM_COLORS = {
-        {255,   3,   3}, {  0,  66, 255}, {  0, 206, 209}, { 84,   0, 129},
-        {255, 252,   0}, {254, 138,  14}, { 32, 192,   0}, {229,  91, 176},
-        {149, 150, 151}, {126, 191, 241}, {  0,  97,  31}, { 78,  42,   4},
-    };
-
     // Camera defaults
     private float cameraYaw = 200f;
     private float cameraPitch = 20f;
@@ -810,19 +804,14 @@ public final class ThumbnailRenderer {
     }
 
     private static int loadTeamColorSwatchTexture(int tcIdx, Path modelDir, Path rootDir) {
-        BufferedImage img = GameDataSource.getInstance().loadTeamColorTexture(tcIdx, modelDir, rootDir);
-        if (img != null) {
-            return GlPreviewCanvas.uploadTexture(img);
-        }
+        // Flat team-colour swatch — render the canonical colour rather than uploading
+        // TeamColorNN, whose extended entries (12+) came out grey. Matches GlPreviewCanvas.
         return createSolidColorTexture(resolveTeamColorRgb(tcIdx, modelDir, rootDir));
     }
 
     private static int[] resolveTeamColorRgb(int tcIdx, Path modelDir, Path rootDir) {
-        int[] sampled = GameDataSource.getInstance().loadTeamColorRgb(tcIdx, modelDir, rootDir);
-        if (sampled != null) {
-            return sampled;
-        }
-        return DEFAULT_TEAM_COLORS[Math.max(0, Math.min(DEFAULT_TEAM_COLORS.length - 1, tcIdx))];
+        // Canonical WC3 palette — correct for all 25 colours.
+        return TeamColorOptions.fallbackRgb(tcIdx);
     }
 
     private static int createSolidColorTexture(int[] rgb) {

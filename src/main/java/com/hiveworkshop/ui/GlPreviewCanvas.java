@@ -2244,22 +2244,6 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
         }
     }
 
-    // Fallback only when team color textures cannot be resolved.
-    private static final int[][] DEFAULT_TEAM_COLORS = {
-        {255,   3,   3}, // 0 Red
-        {  0,  66, 255}, // 1 Blue
-        {  0, 206, 209}, // 2 Teal
-        { 84,   0, 129}, // 3 Purple
-        {255, 252,   0}, // 4 Yellow
-        {254, 138,  14}, // 5 Orange
-        { 32, 192,   0}, // 6 Green
-        {229,  91, 176}, // 7 Pink
-        {149, 150, 151}, // 8 Gray
-        {126, 191, 241}, // 9 Light Blue
-        {  0,  97,  31}, // 10 Dark Green
-        { 78,  42,   4}, // 11 Brown
-    };
-
     /** Loads a GL texture for a material layer (handles team color/glow/normal). */
     private int loadLayerTexture(String texPath, int replId, int tc) {
         if (replId == 1 && !texPath.isEmpty()) {
@@ -2326,19 +2310,16 @@ public final class GlPreviewCanvas extends AWTGLCanvas {
     }
 
     private int loadTeamColorSwatchTexture(int tcIdx) {
-        BufferedImage img = GameDataSource.getInstance().loadTeamColorTexture(tcIdx, modelDir, rootDir);
-        if (img != null) {
-            return uploadTexture(img);
-        }
+        // Flat team-colour swatch (ReplaceableId 1). Render the canonical colour
+        // directly instead of uploading the TeamColorNN texture: the extended
+        // colours' textures (12+) are not clean flat solids and came out grey.
         return createSolidColorTexture(resolveTeamColorRgb(tcIdx));
     }
 
     private int[] resolveTeamColorRgb(int tcIdx) {
-        int[] sampled = GameDataSource.getInstance().loadTeamColorRgb(tcIdx, modelDir, rootDir);
-        if (sampled != null) {
-            return sampled;
-        }
-        return DEFAULT_TEAM_COLORS[Math.max(0, Math.min(DEFAULT_TEAM_COLORS.length - 1, tcIdx))];
+        // Canonical WC3 palette — correct for all 25 colours. Sampling the
+        // TeamColorNN texture average misrendered the extended colours as grey.
+        return TeamColorOptions.fallbackRgb(tcIdx);
     }
 
     /** Creates a 4x4 solid color GL texture. */
