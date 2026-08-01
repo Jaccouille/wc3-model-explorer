@@ -50,6 +50,7 @@ public final class ModelViewerDialog extends JFrame {
     private final AppSettings settings; // shared with MainWindow so saves don't clobber
     private Throwable canvasError; // non-null if GL canvas creation failed
     private Timer scrubberSyncTimer;
+    private JSplitPane mainSplitPane; // divider = width of the 3D scene view (persisted)
 
     // Grid controls kept in sync (overlay toggle button + animation-tab checkbox)
     private JToggleButton gridOverlayBtn;
@@ -118,11 +119,11 @@ public final class ModelViewerDialog extends JFrame {
         JPanel leftPanel = buildLeftPanel();
         JTabbedPane rightTabs = buildRightTabs();
 
-        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftPanel, rightTabs);
-        splitPane.setDividerLocation(VIEW_W);
-        splitPane.setResizeWeight(1.0); // extra space goes to the 3D view
-        splitPane.setOneTouchExpandable(true);
-        add(splitPane, BorderLayout.CENTER);
+        mainSplitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftPanel, rightTabs);
+        mainSplitPane.setDividerLocation(settings.uiInt("viewerSceneWidth", VIEW_W));
+        mainSplitPane.setResizeWeight(1.0); // extra space goes to the 3D view
+        mainSplitPane.setOneTouchExpandable(true);
+        add(mainSplitPane, BorderLayout.CENTER);
 
         // Auto-select first sequence
         if (previewCanvas != null) {
@@ -342,13 +343,16 @@ public final class ModelViewerDialog extends JFrame {
     private void persist(String key, boolean value) { settings.setViewerPref(key, value); settings.save(); }
     private void persist(String key, int value)     { settings.setViewerPref(key, value); settings.save(); }
 
-    /** Persists this viewer window's size/maximized state (shared across all viewer windows). */
+    /** Persists this viewer window's size/maximized state and the 3D scene (split) width. */
     private void persistWindowBounds() {
         boolean maximized = (getExtendedState() & JFrame.MAXIMIZED_BOTH) != 0;
         settings.setUiPref("viewerWindowMaximized", maximized);
         if (!maximized) {
             settings.setUiPref("viewerWindowWidth", getWidth());
             settings.setUiPref("viewerWindowHeight", getHeight());
+        }
+        if (mainSplitPane != null) {
+            settings.setUiPref("viewerSceneWidth", mainSplitPane.getDividerLocation());
         }
         settings.save();
     }
