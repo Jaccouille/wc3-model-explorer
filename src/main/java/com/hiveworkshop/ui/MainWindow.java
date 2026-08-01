@@ -541,10 +541,12 @@ public final class MainWindow extends JFrame {
         rootField.setText(settings.lastRootDirectory());
         portraitFilterCombo.setSelectedItem(settings.portraitFilter());
         thumbnailSizeCombo.setSelectedItem(settings.thumbnailSize());
-        thumbnailTeamColorCombo.setRenderer(new TeamColorComboRenderer(thumbnailTeamColorCombo, idx -> {
-            int[] rgb = GameDataSource.getInstance().loadTeamColorRgb(idx, null, currentScanRoot());
-            return rgb != null ? rgb : TeamColorOptions.fallbackRgb(idx);
-        }));
+        // Swatches show the canonical WC3 team colour. We deliberately do NOT average
+        // the TeamColorNN texture here: the extended colours (12+, e.g. maroon/navy/
+        // turquoise/violet) can average to grey (non-flat or Reforged .dds textures),
+        // which misrepresented them in the picker.
+        thumbnailTeamColorCombo.setRenderer(
+                new TeamColorComboRenderer(thumbnailTeamColorCombo, TeamColorOptions::fallbackRgb));
         thumbnailTeamColorCombo.setSelectedIndex(settings.thumbnailTeamColor());
         thumbnailTeamColorCombo.setToolTipText(get("main.thumbnailTeamColor"));
         restoreFilters();

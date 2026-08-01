@@ -680,10 +680,9 @@ public final class ModelViewerDialog extends JFrame {
         JComboBox<String> tcCombo = new JComboBox<>(TeamColorOptions.labels());
         int tcInit = Math.max(0, Math.min(tcCombo.getItemCount() - 1, settings.viewerInt("teamColor", 0)));
         tcCombo.setSelectedIndex(tcInit);
-        tcCombo.setRenderer(new TeamColorComboRenderer(tcCombo, idx -> {
-            int[] rgb = GameDataSource.getInstance().loadTeamColorRgb(idx, asset.path().getParent(), scanRoot);
-            return rgb != null ? rgb : TeamColorOptions.fallbackRgb(idx);
-        }));
+        // Swatches show the canonical WC3 team colour (see MainWindow): the extended
+        // colours' textures can average to grey, so we don't sample them for the picker.
+        tcCombo.setRenderer(new TeamColorComboRenderer(tcCombo, TeamColorOptions::fallbackRgb));
         tcCombo.addActionListener(e -> {
             if (previewCanvas != null) previewCanvas.setTeamColor(tcCombo.getSelectedIndex());
             persist("teamColor", tcCombo.getSelectedIndex());
