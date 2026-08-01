@@ -13,6 +13,18 @@ repositories {
     maven { url = uri("http://maven.nikr.net/"); isAllowInsecureProtocol = true  }
 }
 
+// LWJGL native classifier for the OS/arch currently running the build.
+val lwjglNatives: String = run {
+    val os = org.gradle.internal.os.OperatingSystem.current()
+    val arch = System.getProperty("os.arch")
+    val aarch64 = arch.startsWith("aarch64") || arch.startsWith("arm64")
+    when {
+        os.isWindows -> if (aarch64) "natives-windows-arm64" else "natives-windows"
+        os.isMacOsX  -> if (aarch64) "natives-macos-arm64" else "natives-macos"
+        else         -> if (aarch64) "natives-linux-arm64" else "natives-linux"
+    }
+}
+
 dependencies {
     implementation(files("libs/modelstudio-0.05.jar"))
     implementation(files("libs/JCASC.jar"))
@@ -25,8 +37,10 @@ dependencies {
     implementation(platform("org.lwjgl:lwjgl-bom:3.3.6"))
     implementation("org.lwjgl:lwjgl")
     implementation("org.lwjgl:lwjgl-opengl")
-    runtimeOnly("org.lwjgl:lwjgl::natives-windows")
-    runtimeOnly("org.lwjgl:lwjgl-opengl::natives-windows")
+    // Bundle the LWJGL natives matching the OS building the package, so
+    // jpackage on each release runner produces a runnable image for that OS.
+    runtimeOnly("org.lwjgl:lwjgl::$lwjglNatives")
+    runtimeOnly("org.lwjgl:lwjgl-opengl::$lwjglNatives")
     implementation("org.lwjglx:lwjgl3-awt:0.2.3") {
         exclude(group = "org.lwjgl", module = "lwjgl")
         exclude(group = "org.lwjgl", module = "lwjgl-opengl")
@@ -76,7 +90,12 @@ runtime {
     }
 }
 
+tasks.withType<JavaCompile>().configureEach {
+    options.encoding = "UTF-8"
+}
+
 tasks.processResources {
+    filteringCharset = "UTF-8"
     filesMatching("version.properties") {
         expand("version" to project.version)
     }
