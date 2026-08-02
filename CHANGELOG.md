@@ -15,7 +15,6 @@ All notable changes to this project will be documented in this file.
 - Editable speed input field next to the animation speed slider
 - Persisted window sizes and maximized state for the main and model-viewer windows, the model viewer's 3D scene width, and the main-window filter selections (sort order, search text, and advanced filters)
 - Persisted model-viewer control settings (overlays, shading, etc.) with a reset-to-defaults button
-- Experimental macOS and Linux builds: packaging now bundles the LWJGL natives for the OS it is built on, and a tag-triggered GitHub Actions workflow produces portable Windows, macOS, and Linux builds
 
 ### Changed
 - Animation speed now supports two-decimal precision (e.g. `0.05`)

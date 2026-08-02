@@ -30,6 +30,7 @@ WC3 Model Explorer is a standalone desktop application for browsing and previewi
 [*]Sort by name, file size, or parent folder
 [*]Favorites and recent models tracking
 [*]Advanced filters: animation name, texture path, polygon range, file size range, portrait filter
+[*]Tag filtering: auto-extracts tags from the [ICODE]readme.html[/ICODE] that HiveWorkshop bundles with model downloads (found in a model's folder or its parent); tri-state Include/Exclude filter buttons plus custom per-model tags
 [*]Team color selector for thumbnails
 [*]Right-click context menu: copy path/file, open file location, open in external program, delete
 [*]Drag & drop models to external applications (copies the file)

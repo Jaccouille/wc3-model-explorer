@@ -31,7 +31,7 @@ Scan directories or map archives, view 3D thumbnails, and explore model internal
 
 ### Tagging
 
-- Auto-extracted tags from `readme.html` files placed in a model's folder (or its parent), parsing lines like `Tags: Hero, Unit, Historic`
+- Auto-extracted tags from the `readme.html` that [HiveWorkshop](https://www.hiveworkshop.com/) bundles inside its model downloads — the app scans a model's folder (and its parent) for that file and reads its `Tags: Hero, Unit, Historic` line
 - Per-model custom tags added via the right-click **Tags** submenu
 - Tri-state tag filter buttons — click to cycle **Neutral → Include → Exclude** to require or hide models with a given tag
 - Hide unwanted tags from the filter bar via **Settings > Tags**, with a one-click restore for previously hidden tags
