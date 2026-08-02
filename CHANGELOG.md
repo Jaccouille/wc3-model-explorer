@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-08-02
+
+### Added
+- Spanish (es) and Russian (ru) translations
+- TGA texture support — `.tga` textures now load, including as a fallback for models that reference a `.blp`/`.dds` path but ship a loose `.tga`
+- Model viewer **Open in viewer** context-menu action: open each selected model in its own viewer window (with a confirmation prompt when opening more than 10 at once)
+- Model viewer **Copy with textures** context-menu action: copies a model together with its loose/custom textures, preserving the folder structure (archived CASC/MPQ textures are skipped)
+- Model viewer **None** sequence option to show the default (bind) pose
+- Grid-toggle and **Recenter** overlay buttons in the top-right of the 3D scene
+- Native minimize/maximize controls on the model viewer window
+- Editable speed input field next to the animation speed slider
+- Persisted window sizes and maximized state for the main and model-viewer windows, the model viewer's 3D scene width, and the main-window filter selections (sort order, search text, and advanced filters)
+- Persisted model-viewer control settings (overlays, shading, etc.) with a reset-to-defaults button
+- Experimental macOS and Linux builds: packaging now bundles the LWJGL natives for the OS it is built on, and a tag-triggered GitHub Actions workflow produces portable Windows, macOS, and Linux builds
+
+### Changed
+- Animation speed now supports two-decimal precision (e.g. `0.05`)
+
+### Fixed
+- Particle and ribbon emitters now freeze when the animation is stopped or paused, instead of continuing to emit and move
+- Extended team colors (maroon, navy, turquoise, violet, and the others past brown) now display correctly in the color picker, on the 3D model, and in thumbnails — they previously appeared grey
+- The model viewer now frames the model to fit as soon as it opens, matching a manual **Recenter**
+- A fresh clone now builds and runs: project sources under `com/` were being excluded by an overly broad `.gitignore` rule
+
 ## [1.4.0] - 2026-05-17
 
 ### Added
